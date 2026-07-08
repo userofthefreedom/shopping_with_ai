@@ -6,6 +6,7 @@ matplotlib
 scikit-learn
 opencv-python
 transformers
+accelerate
 datasets
 ultralytics
 huggingface_hub
