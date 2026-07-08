@@ -8,6 +8,7 @@ opencv-python
 transformers
 datasets
 ultralytics
+huggingface_hub
 chromadb
 gradio
 langchain
