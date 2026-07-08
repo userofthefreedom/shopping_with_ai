@@ -5,6 +5,8 @@ import logging
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from detection.color import describe_item
+
 logger = logging.getLogger(__name__)
 
 _MODEL_NAME = "Bllossom/llama-3.2-Korean-Bllossom-3B"
@@ -70,8 +72,8 @@ def _build_system_prompt(context: dict) -> str:
     candidate_products = context.get("candidate_products") or []
 
     if detected_item:
-        category = detected_item.get("category", "상품")
-        item_description = f"인식된 상품: {color or ''}색 {category}".strip()
+        description = describe_item(detected_item.get("category", "상품"), color or "")
+        item_description = f"인식된 상품: {description}"
     else:
         item_description = "인식된 상품: 없음"
 

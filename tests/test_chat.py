@@ -11,7 +11,7 @@ def test_build_system_prompt_includes_detected_item_and_color():
 
     prompt = _build_system_prompt(context)
 
-    assert "빨간색 short_sleeved_shirt" in prompt
+    assert "빨간색 반팔 셔츠" in prompt
     assert "없음" in prompt  # 후보 상품 없음 안내
 
 
