@@ -1,0 +1,16 @@
+# PyTorch는 CUDA(cu128) 인덱스로 별도 설치 (이 머신의 GPU/드라이버로 검증된 조합):
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+numpy
+pandas
+matplotlib
+scikit-learn
+opencv-python
+transformers
+datasets
+ultralytics
+chromadb
+gradio
+langchain
+requests
+python-dotenv
+pytest

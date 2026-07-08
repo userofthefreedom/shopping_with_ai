@@ -1,0 +1,21 @@
+# Claude 작업/소통용 문서 (로컬 전용, 저장소에 커밋하지 않음)
+docs/for_claude/
+Claude.md
+.claude
+
+# 환경 변수 / 시크릿
+.env
+
+# ChromaDB persist 디렉터리 (모델/벡터 데이터, git으로 관리하지 않음)
+data/chroma/*
+!data/chroma/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 모델 가중치 캐시 (huggingface, ultralytics 등)
+*.pt
+*.onnx
+.cache/
