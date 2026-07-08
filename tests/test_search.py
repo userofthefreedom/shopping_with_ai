@@ -1,8 +1,13 @@
+import io
 from unittest.mock import Mock, patch
 
+import numpy as np
 import pytest
 import requests
+from PIL import Image
 
+from search import clip_search
+from search.clip_search import embed_image, index_products, search_similar
 from search.naver_api import NaverAPIError, search_naver
 
 _FAKE_RESPONSE_JSON = {
@@ -82,3 +87,68 @@ def test_search_naver_raises_on_timeout(monkeypatch):
     with patch("search.naver_api.requests.get", side_effect=requests.Timeout("timed out")):
         with pytest.raises(NaverAPIError):
             search_naver("빨간색 반팔 셔츠")
+
+
+def _png_bytes(color):
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 64), color=color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@pytest.fixture
+def isolated_chroma(tmp_path, monkeypatch):
+    monkeypatch.setattr(clip_search, "_CHROMA_PATH", str(tmp_path / "chroma"))
+    monkeypatch.setattr(clip_search, "_client", None)
+    monkeypatch.setattr(clip_search, "_collection", None)
+    yield
+
+
+def test_embed_image_returns_normalized_512d_vector():
+    image = Image.new("RGB", (64, 64), color=(100, 150, 200))
+
+    embedding = embed_image(image)
+
+    assert embedding.shape == (512,)
+    assert abs(np.linalg.norm(embedding) - 1.0) < 1e-3
+
+
+def test_index_products_and_search_similar_orders_by_similarity(isolated_chroma):
+    products = [
+        {
+            "name": "레드 셔츠",
+            "price": 10000,
+            "image_url": "https://example.com/red.jpg",
+            "purchase_url": "https://example.com/item/red",
+        },
+        {
+            "name": "블루 셔츠",
+            "price": 20000,
+            "image_url": "https://example.com/blue.jpg",
+            "purchase_url": "https://example.com/item/blue",
+        },
+    ]
+
+    def fake_get(url, timeout=5):
+        color = (220, 20, 20) if "red" in url else (20, 20, 220)
+        response = Mock()
+        response.raise_for_status = Mock()
+        response.content = _png_bytes(color)
+        return response
+
+    with patch("search.clip_search.requests.get", side_effect=fake_get):
+        indexed_count = index_products(products, category="short_sleeved_shirt", color="빨간")
+
+    assert indexed_count == 2
+
+    query_embedding = embed_image(Image.new("RGB", (64, 64), color=(200, 30, 30)))
+    results = search_similar(query_embedding, top_k=2)
+
+    assert len(results) == 2
+    assert results[0]["name"] == "레드 셔츠"
+    assert results[0]["source"] == "naver"
+
+
+def test_search_similar_returns_empty_list_when_collection_empty(isolated_chroma):
+    query_embedding = embed_image(Image.new("RGB", (64, 64), color=(128, 128, 128)))
+
+    assert search_similar(query_embedding, top_k=5) == []
