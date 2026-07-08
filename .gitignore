@@ -1,6 +1,8 @@
 # Claude 작업/소통용 문서 (로컬 전용, 저장소에 커밋하지 않음)
+# 주의: CLAUDE.md 자체는 예외로 커밋 대상이다 (Windows는 대소문자 구분이 없어
+# "Claude.md"를 여기 적으면 CLAUDE.md까지 무시되어 버린다 — 실제로 지금까지
+# 한 번도 커밋되지 않은 상태였음). CLAUDE.md는 절대 여기에 추가하지 말 것.
 docs/for_claude/
-Claude.md
 .claude
 
 # 환경 변수 / 시크릿
