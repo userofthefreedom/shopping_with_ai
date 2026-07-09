@@ -33,6 +33,27 @@ def _sample_products():
     ]
 
 
+def test_lock_chat_input_for_analysis_disables_and_sets_placeholder():
+    update = app._lock_chat_input_for_analysis()
+
+    assert update["interactive"] is False
+    assert update["placeholder"] == app._ANALYZING_PLACEHOLDER
+
+
+def test_lock_chat_input_for_response_disables_and_sets_placeholder():
+    update = app._lock_chat_input_for_response()
+
+    assert update["interactive"] is False
+    assert update["placeholder"] == app._THINKING_PLACEHOLDER
+
+
+def test_unlock_chat_input_reenables_and_restores_placeholder():
+    update = app._unlock_chat_input()
+
+    assert update["interactive"] is True
+    assert update["placeholder"] == app._CHAT_PLACEHOLDER
+
+
 def test_search_naver_variants_merges_synonym_queries_deduped():
     calls = []
 
@@ -77,11 +98,11 @@ def test_search_naver_variants_merges_synonym_queries_deduped():
 
 def test_on_image_upload_no_detection_shows_message_and_resets_state():
     with patch("app.detect_products", return_value=[]):
-        bbox_image, text, gallery, links_html, state, chatbot = app.on_image_upload(
+        bbox_image, text, warning, gallery, links_html, state, chatbot = app.on_image_upload(
             _sample_image()
         )
 
-    assert "인식된 상품이 없습니다" in text
+    assert "인식된 상품이 없습니다" in warning
     assert gallery == []
     assert links_html == ""
     assert state["candidate_products"] == []
@@ -98,11 +119,12 @@ def test_on_image_upload_happy_path_builds_gallery_and_state():
         patch("app.embed_image", return_value=object()),
         patch("app.search_similar", return_value=products),
     ):
-        bbox_image, text, gallery, links_html, state, chatbot = app.on_image_upload(
+        bbox_image, text, warning, gallery, links_html, state, chatbot = app.on_image_upload(
             _sample_image()
         )
 
     assert "빨간색 반팔 셔츠" in text
+    assert warning == ""
     assert mock_index.called
     assert gallery == [
         ("https://example.com/a.jpg", "A 셔츠 - 50,000원"),
@@ -122,12 +144,12 @@ def test_on_image_upload_naver_failure_continues_gracefully():
         patch("app.embed_image", return_value=object()),
         patch("app.search_similar", return_value=[]),
     ):
-        bbox_image, text, gallery, links_html, state, chatbot = app.on_image_upload(
+        bbox_image, text, warning, gallery, links_html, state, chatbot = app.on_image_upload(
             _sample_image()
         )
 
-    assert "상품 정보를 가져오지 못했습니다" in text
-    assert "유사 상품을 찾지 못했습니다" in text
+    assert "상품 정보를 가져오지 못했습니다" in warning
+    assert "유사 상품을 찾지 못했습니다" in warning
     assert not mock_index.called
     assert gallery == []
     assert state["candidate_products"] == []
@@ -142,10 +164,10 @@ def test_on_image_upload_no_similar_products_shows_message():
         patch("app.embed_image", return_value=object()),
         patch("app.search_similar", return_value=[]),
     ):
-        _, text, gallery, links_html, state, _ = app.on_image_upload(_sample_image())
+        _, text, warning, gallery, links_html, state, _ = app.on_image_upload(_sample_image())
 
-    assert "유사 상품을 찾지 못했습니다" in text
-    assert "상품 정보를 가져오지 못했습니다" not in text
+    assert "유사 상품을 찾지 못했습니다" in warning
+    assert "상품 정보를 가져오지 못했습니다" not in warning
     assert not mock_index.called
     assert gallery == []
 

@@ -18,6 +18,10 @@ _TOP_K = 5
 
 _EMPTY_STATE = {"detected_item": None, "color": None, "candidate_products": [], "history": []}
 
+_CHAT_PLACEHOLDER = "예: 이거 뭐야? / 얼마야? / 더 저렴한 거 있어?"
+_ANALYZING_PLACEHOLDER = "이미지 분석 중입니다. 잠시만 기다려주세요..."
+_THINKING_PLACEHOLDER = "답변 생성 중입니다. 잠시만 기다려주세요..."
+
 
 def _draw_bbox(image, bbox):
     overlay = image.convert("RGB").copy()
@@ -50,6 +54,20 @@ def _search_naver_variants(category, color):
     return merged
 
 
+def _lock_chat_input_for_analysis():
+    """이미지 분석이 끝나기 전에 채팅을 보내 빈 state로 응답받는 것을 막는다."""
+    return gr.update(interactive=False, placeholder=_ANALYZING_PLACEHOLDER)
+
+
+def _lock_chat_input_for_response():
+    """챗봇 응답 생성 중 중복 제출을 막는다."""
+    return gr.update(interactive=False, placeholder=_THINKING_PLACEHOLDER)
+
+
+def _unlock_chat_input():
+    return gr.update(interactive=True, placeholder=_CHAT_PLACEHOLDER)
+
+
 def _build_links_html(products):
     if not products:
         return ""
@@ -63,26 +81,27 @@ def _build_links_html(products):
 
 def on_image_upload(image):
     if image is None:
-        return None, "", [], "", dict(_EMPTY_STATE), []
+        return None, "", "", [], "", dict(_EMPTY_STATE), []
 
     detections = detect_products(image)
     if not detections:
         message = "인식된 상품이 없습니다. 다른 사진을 업로드해보세요."
         chatbot = [{"role": "assistant", "content": message}]
-        return image, message, [], "", dict(_EMPTY_STATE), chatbot
+        return image, "", message, [], "", dict(_EMPTY_STATE), chatbot
 
     detection = max(detections, key=lambda d: d["confidence"])
     bbox = detection["bbox"]
     color = detect_color(image, bbox)
     description = describe_item(detection["category"], color)
 
-    status_lines = [f"인식된 상품: {description}"]
+    info_text = f"인식된 상품: {description}"
+    warnings = []
 
     try:
         naver_products = _search_naver_variants(detection["category"], color)
     except NaverAPIError:
         naver_products = []
-        status_lines.append("상품 정보를 가져오지 못했습니다.")
+        warnings.append("상품 정보를 가져오지 못했습니다.")
 
     if naver_products:
         try:
@@ -95,7 +114,7 @@ def on_image_upload(image):
     candidate_products = search_similar(embedding, top_k=_TOP_K) or naver_products
 
     if not candidate_products:
-        status_lines.append("유사 상품을 찾지 못했습니다.")
+        warnings.append("유사 상품을 찾지 못했습니다.")
 
     bbox_image = _draw_bbox(image, bbox)
     state = {
@@ -113,7 +132,8 @@ def on_image_upload(image):
 
     return (
         bbox_image,
-        "\n".join(status_lines),
+        info_text,
+        "\n".join(f"**주의:** {w}" for w in warnings),
         _build_gallery(candidate_products),
         _build_links_html(candidate_products),
         state,
@@ -167,11 +187,12 @@ with gr.Blocks(title="AI 쇼핑 어시스턴트") as demo:
             image_input = gr.Image(type="pil", label="상품 사진 업로드")
             bbox_output = gr.Image(label="탐지 결과")
             detection_text = gr.Textbox(label="인식 결과", interactive=False)
+            warning_text = gr.Markdown()
         with gr.Column():
             chatbot = gr.Chatbot(label="쇼핑 어시스턴트")
             chat_input = gr.Textbox(
                 label="메시지 입력",
-                placeholder="예: 이거 뭐야? / 얼마야? / 더 저렴한 거 있어?",
+                placeholder=_CHAT_PLACEHOLDER,
             )
 
     gr.Markdown("## 추천 상품")
@@ -179,14 +200,26 @@ with gr.Blocks(title="AI 쇼핑 어시스턴트") as demo:
     links_html = gr.HTML()
 
     image_input.upload(
+        fn=_lock_chat_input_for_analysis,
+        outputs=[chat_input],
+    ).then(
         fn=on_image_upload,
         inputs=[image_input],
-        outputs=[bbox_output, detection_text, gallery, links_html, state, chatbot],
+        outputs=[bbox_output, detection_text, warning_text, gallery, links_html, state, chatbot],
+    ).then(
+        fn=_unlock_chat_input,
+        outputs=[chat_input],
     )
     chat_input.submit(
+        fn=_lock_chat_input_for_response,
+        outputs=[chat_input],
+    ).then(
         fn=on_chat_submit,
         inputs=[chat_input, chatbot, state],
         outputs=[chatbot, chat_input, state, gallery, links_html],
+    ).then(
+        fn=_unlock_chat_input,
+        outputs=[chat_input],
     )
 
 
