@@ -82,7 +82,10 @@ def _rgb_to_korean_name(rgb: tuple) -> str:
 
     if v < 0.2:
         return "검정"
-    if s < 0.15:
+    if s < 0.08:
+        # 실제 사진(조명/그림자/원단 질감)은 합성 단색보다 채도가 낮게
+        # 측정되는 경향이 있어, 카키색처럼 원래 채도가 낮은 색까지
+        # 무채색으로 오분류하지 않도록 임계값을 보수적으로 낮게 둔다.
         return "흰색" if v > 0.85 else "회색"
 
     if hue_deg < 15 or hue_deg >= 345:

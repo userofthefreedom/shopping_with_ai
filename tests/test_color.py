@@ -16,6 +16,7 @@ from detection.color import describe_item, detect_color, search_query_terms
         ((128, 128, 128), "회색"),
         ((101, 67, 33), "갈색"),
         ((25, 25, 70), "남색"),  # 어두운 네이비: hue만으론 "파란"과 같은 대역
+        ((75, 82, 74), "초록"),  # 카키/국방색: 실제 사진에서 채도가 낮게 측정됨
     ],
 )
 def test_detect_color_maps_solid_patch_to_korean_name(rgb, expected):
