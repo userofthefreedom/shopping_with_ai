@@ -18,3 +18,6 @@ __pycache__/
 *.pt
 *.onnx
 .cache/
+
+# 이슈 분석용 로컬 폴더
+problem/

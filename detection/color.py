@@ -22,6 +22,17 @@ _CATEGORY_KO = {
     "sling_dress": "민소매 원피스",
 }
 
+# DeepFashion2의 상의 카테고리는 와이셔츠부터 그래픽 티셔츠까지 폭넓게 아우르는데,
+# `_CATEGORY_KO`의 단일 번역만 네이버 검색어로 쓰면 랭킹이 칼라 있는 정장 셔츠
+# 쪽으로 쏠려 실제로는 다른 스타일(티셔츠 등)인 상품을 후보군에서 놓친다.
+# 애매한 카테고리는 동의어를 함께 검색해 후보군을 넓히기 위한 목록.
+_CATEGORY_SEARCH_SYNONYMS = {
+    "short_sleeved_shirt": ["반팔 셔츠", "반팔 티셔츠"],
+    "long_sleeved_shirt": ["긴팔 셔츠", "긴팔 티셔츠"],
+    "short_sleeved_outwear": ["반팔 아우터", "반팔 가디건"],
+    "long_sleeved_outwear": ["긴팔 아우터", "긴팔 자켓"],
+}
+
 
 def detect_color(image: Image.Image, bbox: tuple) -> str:
     """bbox 영역의 대표 색상을 K-means로 추출해 한국어 색상명으로 반환한다 (예: "빨간")."""
@@ -39,6 +50,17 @@ def describe_item(category: str, color: str) -> str:
     category_ko = _CATEGORY_KO.get(category, category)
     color_ko = color if color.endswith("색") else f"{color}색"
     return f"{color_ko} {category_ko}"
+
+
+def search_query_terms(category: str) -> list[str]:
+    """네이버 쇼핑 검색에 사용할 카테고리 동의어 목록을 반환한다.
+
+    애매한 카테고리는 여러 동의어(예: "셔츠"/"티셔츠")를, 그 외에는 `_CATEGORY_KO`
+    번역 하나만 담은 리스트를 반환한다.
+    """
+    if category in _CATEGORY_SEARCH_SYNONYMS:
+        return list(_CATEGORY_SEARCH_SYNONYMS[category])
+    return [_CATEGORY_KO.get(category, category)]
 
 
 def _dominant_color(crop: Image.Image) -> tuple:
@@ -72,7 +94,8 @@ def _rgb_to_korean_name(rgb: tuple) -> str:
     if hue_deg < 170:
         return "초록"
     if hue_deg < 255:
-        return "파란"
+        # 네이비는 hue만 보면 일반 파란과 같은 대역이라 어둡기(v)로 구분한다.
+        return "남색" if v < 0.35 else "파란"
     if hue_deg < 280:
         return "남색"
     if hue_deg < 330:

@@ -1,7 +1,7 @@
 import pytest
 from PIL import Image
 
-from detection.color import describe_item, detect_color
+from detection.color import describe_item, detect_color, search_query_terms
 
 
 @pytest.mark.parametrize(
@@ -15,6 +15,7 @@ from detection.color import describe_item, detect_color
         ((255, 255, 255), "흰색"),
         ((128, 128, 128), "회색"),
         ((101, 67, 33), "갈색"),
+        ((25, 25, 70), "남색"),  # 어두운 네이비: hue만으론 "파란"과 같은 대역
     ],
 )
 def test_detect_color_maps_solid_patch_to_korean_name(rgb, expected):
@@ -42,3 +43,15 @@ def test_describe_item_does_not_double_saek_suffix():
 
 def test_describe_item_falls_back_to_raw_category_when_unknown():
     assert describe_item("unknown_category", "파란") == "파란색 unknown_category"
+
+
+def test_search_query_terms_returns_synonyms_for_ambiguous_shirt_category():
+    assert search_query_terms("short_sleeved_shirt") == ["반팔 셔츠", "반팔 티셔츠"]
+
+
+def test_search_query_terms_returns_single_translation_for_other_categories():
+    assert search_query_terms("skirt") == ["치마"]
+
+
+def test_search_query_terms_falls_back_to_raw_category_when_unknown():
+    assert search_query_terms("unknown_category") == ["unknown_category"]

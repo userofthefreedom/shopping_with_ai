@@ -49,6 +49,25 @@ conda create -n shopping_assistant python=3.10 -y
 conda activate shopping_assistant
 ```
 
+> **Git Bash(MINGW64)에서 `conda: command not found`가 뜨는 경우**
+> Git Bash 새 터미널에는 conda가 기본으로 초기화되어 있지 않습니다. 아래처럼
+> conda의 bash 훅을 먼저 불러온 뒤 activate 하세요 (Miniforge3 설치 경로가
+> 다르면 경로를 맞게 바꾸세요).
+> ```bash
+> source /c/Users/SSAFY/miniforge3/etc/profile.d/conda.sh
+> conda activate shopping_assistant
+> ```
+> 매번 새 터미널마다 다시 치기 번거로우면 `~/.bashrc`에 위 `source` 줄을
+> 한 번만 추가해두면 이후로는 Git Bash를 열 때마다 자동으로 conda가
+> 잡힙니다:
+> ```bash
+> echo 'source /c/Users/SSAFY/miniforge3/etc/profile.d/conda.sh' >> ~/.bashrc
+> ```
+> 환경이 이미 만들어져 있다면(`conda env list`로 확인) `conda create` 줄은
+> 건너뛰고 `conda activate shopping_assistant`부터 하면 됩니다 — 이미 있는
+> 이름으로 다시 `create`해도 기존 환경을 덮어쓰지 않고 에러만 내고
+> 끝나므로 안전합니다.
+
 ### 2. 패키지 설치
 ```bash
 # PyTorch (CUDA 12.8)

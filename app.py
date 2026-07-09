@@ -6,7 +6,7 @@ import gradio as gr
 from PIL import ImageDraw
 
 from chat.llm import generate_response
-from detection.color import describe_item, detect_color
+from detection.color import describe_item, detect_color, search_query_terms
 from detection.detect import detect_products
 from search.budget import filter_by_budget, parse_budget
 from search.clip_search import embed_image, index_products, search_similar
@@ -28,6 +28,26 @@ def _draw_bbox(image, bbox):
 
 def _build_gallery(products):
     return [(p["image_url"], f"{p['name']} - {p['price']:,}원") for p in products]
+
+
+def _search_naver_variants(category, color):
+    """카테고리 동의어별로 네이버 검색을 수행해 결과를 구매링크 기준으로 합친다.
+
+    DeepFashion2 카테고리 하나(예: short_sleeved_shirt)가 와이셔츠부터
+    그래픽 티셔츠까지 아우르는데, 번역어 하나로만 검색하면 네이버 랭킹이
+    한쪽(주로 정장 셔츠)으로 쏠려 실제로 다른 스타일인 상품을 후보군에서
+    놓친다. 동의어를 함께 검색해 후보군을 넓힌다.
+    """
+    color_ko = color if color.endswith("색") else f"{color}색"
+    seen_urls = set()
+    merged = []
+    for term in search_query_terms(category):
+        for product in search_naver(f"{color_ko} {term}"):
+            if product["purchase_url"] in seen_urls:
+                continue
+            seen_urls.add(product["purchase_url"])
+            merged.append(product)
+    return merged
 
 
 def _build_links_html(products):
@@ -59,7 +79,7 @@ def on_image_upload(image):
     status_lines = [f"인식된 상품: {description}"]
 
     try:
-        naver_products = search_naver(description)
+        naver_products = _search_naver_variants(detection["category"], color)
     except NaverAPIError:
         naver_products = []
         status_lines.append("상품 정보를 가져오지 못했습니다.")

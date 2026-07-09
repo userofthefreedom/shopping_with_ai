@@ -33,6 +33,48 @@ def _sample_products():
     ]
 
 
+def test_search_naver_variants_merges_synonym_queries_deduped():
+    calls = []
+
+    def fake_search_naver(query):
+        calls.append(query)
+        if "티셔츠" in query:
+            return [
+                {
+                    "name": "티셔츠 상품",
+                    "price": 10000,
+                    "image_url": "https://example.com/tee.jpg",
+                    "purchase_url": "https://example.com/item/tee",
+                    "source": "네이버",
+                }
+            ]
+        return [
+            {
+                "name": "셔츠 상품",
+                "price": 20000,
+                "image_url": "https://example.com/shirt.jpg",
+                "purchase_url": "https://example.com/item/shirt",
+                "source": "네이버",
+            },
+            {
+                "name": "중복 상품(티셔츠 검색에서도 잡힘)",
+                "price": 10000,
+                "image_url": "https://example.com/tee.jpg",
+                "purchase_url": "https://example.com/item/tee",
+                "source": "네이버",
+            },
+        ]
+
+    with patch("app.search_naver", side_effect=fake_search_naver):
+        merged = app._search_naver_variants("short_sleeved_shirt", "파란")
+
+    assert calls == ["파란색 반팔 셔츠", "파란색 반팔 티셔츠"]
+    assert [p["purchase_url"] for p in merged] == [
+        "https://example.com/item/shirt",
+        "https://example.com/item/tee",
+    ]
+
+
 def test_on_image_upload_no_detection_shows_message_and_resets_state():
     with patch("app.detect_products", return_value=[]):
         bbox_image, text, gallery, links_html, state, chatbot = app.on_image_upload(
