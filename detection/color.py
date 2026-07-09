@@ -45,22 +45,28 @@ def detect_color(image: Image.Image, bbox: tuple) -> str:
     return _rgb_to_korean_name(dominant_rgb)
 
 
-def describe_item(category: str, color: str) -> str:
-    """카테고리 + 색상을 "빨간색 반팔 셔츠" 같은 한국어 설명으로 합친다."""
-    category_ko = _CATEGORY_KO.get(category, category)
+def describe_item(category: str, color: str, subtype: str | None = None) -> str:
+    """카테고리(또는 CLIP 제로샷으로 추정한 subtype) + 색상을 한국어 설명으로 합친다.
+
+    subtype이 주어지면(예: "패딩") `_CATEGORY_KO`의 뭉뚱그린 번역("긴팔 아우터")
+    대신 더 구체적인 subtype을 사용한다. subtype이 없으면 기존 동작과 동일.
+    """
+    category_ko = subtype or _CATEGORY_KO.get(category, category)
     color_ko = color if color.endswith("색") else f"{color}색"
     return f"{color_ko} {category_ko}"
 
 
-def search_query_terms(category: str) -> list[str]:
+def search_query_terms(category: str, subtype: str | None = None) -> list[str]:
     """네이버 쇼핑 검색에 사용할 카테고리 동의어 목록을 반환한다.
 
     애매한 카테고리는 여러 동의어(예: "셔츠"/"티셔츠")를, 그 외에는 `_CATEGORY_KO`
-    번역 하나만 담은 리스트를 반환한다.
+    번역 하나만 담은 리스트를 반환한다. subtype이 주어지면(예: "패딩") 동의어
+    목록에 추가로 포함해 검색 후보군을 넓힌다.
     """
-    if category in _CATEGORY_SEARCH_SYNONYMS:
-        return list(_CATEGORY_SEARCH_SYNONYMS[category])
-    return [_CATEGORY_KO.get(category, category)]
+    terms = list(_CATEGORY_SEARCH_SYNONYMS.get(category, [_CATEGORY_KO.get(category, category)]))
+    if subtype and subtype not in terms:
+        terms.append(subtype)
+    return terms
 
 
 def _dominant_color(crop: Image.Image) -> tuple:

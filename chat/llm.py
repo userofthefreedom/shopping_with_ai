@@ -69,10 +69,11 @@ def generate_response(user_message: str, context: dict) -> str:
 def _build_system_prompt(context: dict) -> str:
     detected_item = context.get("detected_item")
     color = context.get("color")
+    subtype = context.get("subtype")
     candidate_products = context.get("candidate_products") or []
 
     if detected_item:
-        description = describe_item(detected_item.get("category", "상품"), color or "")
+        description = describe_item(detected_item.get("category", "상품"), color or "", subtype)
         item_description = f"인식된 상품: {description}"
     else:
         item_description = "인식된 상품: 없음"

@@ -7,7 +7,7 @@ import requests
 from PIL import Image
 
 from search import clip_search
-from search.clip_search import embed_image, index_products, search_similar
+from search.clip_search import classify_subtype, embed_image, index_products, search_similar
 from search.naver_api import NaverAPIError, search_naver
 
 _FAKE_RESPONSE_JSON = {
@@ -152,6 +152,27 @@ def test_search_similar_returns_empty_list_when_collection_empty(isolated_chroma
     query_embedding = embed_image(Image.new("RGB", (64, 64), color=(128, 128, 128)))
 
     assert search_similar(query_embedding, top_k=5) == []
+
+
+def test_classify_subtype_returns_none_for_category_without_candidates():
+    image = Image.new("RGB", (64, 64), color=(20, 20, 60))
+
+    assert classify_subtype(image, "unknown_category") is None
+
+
+def test_classify_subtype_returns_none_when_confidence_below_threshold():
+    image = Image.new("RGB", (64, 64), color=(20, 20, 60))
+
+    assert classify_subtype(image, "long_sleeved_outwear", min_confidence=0.99) is None
+
+
+def test_classify_subtype_returns_one_of_candidate_labels_when_threshold_disabled():
+    image = Image.new("RGB", (64, 64), color=(20, 20, 60))
+
+    result = classify_subtype(image, "long_sleeved_outwear", min_confidence=0.0)
+
+    expected_labels = {ko for _, ko in clip_search._SUBTYPE_CANDIDATES["long_sleeved_outwear"]}
+    assert result in expected_labels
 
 
 def test_index_products_skips_already_indexed_purchase_url(isolated_chroma):

@@ -9,14 +9,32 @@ from chat.llm import generate_response
 from detection.color import describe_item, detect_color, search_query_terms
 from detection.detect import detect_products
 from search.budget import filter_by_budget, parse_budget
-from search.clip_search import embed_image, index_products, search_similar
+from search.clip_search import classify_subtype, embed_image, index_products, search_similar
 from search.naver_api import NaverAPIError, search_naver
+from search.text_search import index_product_texts, search_similar_text
 
 logger = logging.getLogger(__name__)
 
 _TOP_K = 5
 
-_EMPTY_STATE = {"detected_item": None, "color": None, "candidate_products": [], "history": []}
+# 로컬 텍스트 벡터 검색(KO-SRoBERTa) 결과를 "네이버 실시간 검색 없이 써도 될
+# 만큼 충분하다"고 판단하는 기준. 실제 네이버 검색 결과로 실측한 결과(Phase 12,
+# TEST_RESULT.md 참고) 관련 있는 쿼리는 유사도 0.618~0.722, 무관한 쿼리는
+# 0.430~0.483로 뚜렷이 갈렸다 — CLIP 이미지 유사도(Phase 10, 0.54~0.60에 몰려
+# 못 갈렸음)와 달리 KO-SRoBERTa 텍스트 유사도는 분리가 잘 되어 0.6을 그 사이
+# 값으로 채택.
+_LOCAL_SEARCH_MIN_COUNT = _TOP_K
+_LOCAL_SEARCH_MIN_SIMILARITY = 0.6
+
+_FRESHNESS_KEYWORDS = ("최신", "신상", "재고", "실시간", "현재", "오늘")
+
+_EMPTY_STATE = {
+    "detected_item": None,
+    "color": None,
+    "subtype": None,
+    "candidate_products": [],
+    "history": [],
+}
 
 _CHAT_PLACEHOLDER = "예: 이거 뭐야? / 얼마야? / 더 저렴한 거 있어?"
 _ANALYZING_PLACEHOLDER = "이미지 분석 중입니다. 잠시만 기다려주세요..."
@@ -34,8 +52,9 @@ def _build_gallery(products):
     return [(p["image_url"], f"{p['name']} - {p['price']:,}원") for p in products]
 
 
-def _search_naver_variants(category, color):
-    """카테고리 동의어별로 네이버 검색을 수행해 결과를 구매링크 기준으로 합친다.
+def _search_naver_variants(category, color, subtype=None):
+    """카테고리 동의어(+CLIP 추정 subtype)별로 네이버 검색을 수행해 결과를
+    구매링크 기준으로 합친다.
 
     DeepFashion2 카테고리 하나(예: short_sleeved_shirt)가 와이셔츠부터
     그래픽 티셔츠까지 아우르는데, 번역어 하나로만 검색하면 네이버 랭킹이
@@ -45,13 +64,38 @@ def _search_naver_variants(category, color):
     color_ko = color if color.endswith("색") else f"{color}색"
     seen_urls = set()
     merged = []
-    for term in search_query_terms(category):
+    for term in search_query_terms(category, subtype):
         for product in search_naver(f"{color_ko} {term}"):
             if product["purchase_url"] in seen_urls:
                 continue
             seen_urls.add(product["purchase_url"])
             merged.append(product)
     return merged
+
+
+def _is_local_search_sufficient(results):
+    """로컬 텍스트 벡터 검색 결과만으로 네이버 실시간 검색을 건너뛰어도 될지 판단한다."""
+    if len(results) < _LOCAL_SEARCH_MIN_COUNT:
+        return False
+    return results[0]["similarity"] >= _LOCAL_SEARCH_MIN_SIMILARITY
+
+
+def _is_freshness_request(message):
+    """'최신/신상/재고/실시간/현재/오늘' 등 신선도 키워드가 있으면 네이버 실시간
+    재검색을 트리거한다 (원본 스펙의 "특정 키워드로 웹 검색 트리거" 요구사항)."""
+    return any(keyword in message for keyword in _FRESHNESS_KEYWORDS)
+
+
+def _index_products_everywhere(products, category, color):
+    """새로 얻은 상품을 이미지(CLIP)/텍스트(KO-SRoBERTa) 컬렉션 양쪽에 색인한다."""
+    try:
+        index_products(products, category=category, color=color)
+    except Exception:
+        logger.exception("상품 이미지 색인 실패")
+    try:
+        index_product_texts(products, category=category, color=color)
+    except Exception:
+        logger.exception("상품 텍스트 색인 실패")
 
 
 def _lock_chat_input_for_analysis():
@@ -92,24 +136,30 @@ def on_image_upload(image):
     detection = max(detections, key=lambda d: d["confidence"])
     bbox = detection["bbox"]
     color = detect_color(image, bbox)
-    description = describe_item(detection["category"], color)
+    cropped = image.convert("RGB").crop(tuple(int(round(v)) for v in bbox))
+    subtype = classify_subtype(cropped, detection["category"])
+    description = describe_item(detection["category"], color, subtype)
 
     info_text = f"인식된 상품: {description}"
     warnings = []
 
-    try:
-        naver_products = _search_naver_variants(detection["category"], color)
-    except NaverAPIError:
-        naver_products = []
-        warnings.append("상품 정보를 가져오지 못했습니다.")
-
-    if naver_products:
+    # 로컬 텍스트 벡터(KO-SRoBERTa) 검색 우선 — 충분하면 네이버 실시간 호출을
+    # 건너뛴다 (원본 스펙: "벡터 DB에서의 상품 검색"이 기본, 네이버는 신선도
+    # 키워드가 있을 때만).
+    local_results = search_similar_text(description, top_k=_TOP_K * 2)
+    if _is_local_search_sufficient(local_results):
+        logger.info("로컬 텍스트 검색으로 충분 — 네이버 호출 스킵 (query=%s)", description)
+        naver_products = local_results
+    else:
         try:
-            index_products(naver_products, category=detection["category"], color=color)
-        except Exception:
-            logger.exception("상품 색인 실패")
+            naver_products = _search_naver_variants(detection["category"], color, subtype)
+        except NaverAPIError:
+            naver_products = []
+            warnings.append("상품 정보를 가져오지 못했습니다.")
 
-    cropped = image.convert("RGB").crop(tuple(int(round(v)) for v in bbox))
+        if naver_products:
+            _index_products_everywhere(naver_products, detection["category"], color)
+
     embedding = embed_image(cropped)
     candidate_products = search_similar(embedding, top_k=_TOP_K) or naver_products
 
@@ -120,6 +170,7 @@ def on_image_upload(image):
     state = {
         "detected_item": detection,
         "color": color,
+        "subtype": subtype,
         "candidate_products": candidate_products,
         "history": [],
     }
@@ -146,14 +197,28 @@ def on_chat_submit(user_message, chatbot_messages, state):
     state = dict(state or _EMPTY_STATE)
     candidate_products = state.get("candidate_products", [])
 
+    detected_item = state.get("detected_item")
+    if detected_item and _is_freshness_request(user_message):
+        color = state.get("color") or ""
+        subtype = state.get("subtype")
+        try:
+            fresh_products = _search_naver_variants(detected_item["category"], color, subtype)
+        except NaverAPIError:
+            fresh_products = []
+        if fresh_products:
+            _index_products_everywhere(fresh_products, detected_item["category"], color)
+            candidate_products = fresh_products
+            state["candidate_products"] = candidate_products
+
     condition = parse_budget(user_message)
     if condition is not None:
         candidate_products = filter_by_budget(candidate_products, condition)
         state["candidate_products"] = candidate_products
 
     context = {
-        "detected_item": state.get("detected_item"),
+        "detected_item": detected_item,
         "color": state.get("color"),
+        "subtype": state.get("subtype"),
         "candidate_products": candidate_products,
         "history": state.get("history", []),
     }

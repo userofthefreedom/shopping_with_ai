@@ -56,3 +56,26 @@ def test_search_query_terms_returns_single_translation_for_other_categories():
 
 def test_search_query_terms_falls_back_to_raw_category_when_unknown():
     assert search_query_terms("unknown_category") == ["unknown_category"]
+
+
+def test_describe_item_prefers_subtype_over_category_translation():
+    assert describe_item("long_sleeved_outwear", "남색", subtype="패딩") == "남색 패딩"
+
+
+def test_describe_item_uses_category_translation_when_subtype_is_none():
+    assert describe_item("long_sleeved_outwear", "남색", subtype=None) == "남색 긴팔 아우터"
+
+
+def test_search_query_terms_appends_subtype_to_synonyms():
+    assert search_query_terms("long_sleeved_outwear", subtype="패딩") == [
+        "긴팔 아우터",
+        "긴팔 자켓",
+        "패딩",
+    ]
+
+
+def test_search_query_terms_does_not_duplicate_subtype_already_in_synonyms():
+    assert search_query_terms("long_sleeved_outwear", subtype="긴팔 자켓") == [
+        "긴팔 아우터",
+        "긴팔 자켓",
+    ]

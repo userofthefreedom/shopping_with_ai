@@ -96,6 +96,23 @@ def test_search_naver_variants_merges_synonym_queries_deduped():
     ]
 
 
+def test_is_local_search_sufficient_requires_min_count_and_similarity():
+    high_sim_results = [{"similarity": 0.9}] * app._LOCAL_SEARCH_MIN_COUNT
+
+    assert app._is_local_search_sufficient(high_sim_results) is True
+    assert app._is_local_search_sufficient(high_sim_results[:-1]) is False  # 개수 부족
+
+    low_sim_results = [{"similarity": 0.1}] * app._LOCAL_SEARCH_MIN_COUNT
+    assert app._is_local_search_sufficient(low_sim_results) is False  # 유사도 부족
+
+
+def test_is_freshness_request_detects_keywords():
+    assert app._is_freshness_request("최신 상품 있어?") is True
+    assert app._is_freshness_request("오늘 신상 뭐 있어") is True
+    assert app._is_freshness_request("이거 뭐야?") is False
+    assert app._is_freshness_request("10만원 이하로 보여줘") is False
+
+
 def test_on_image_upload_no_detection_shows_message_and_resets_state():
     with patch("app.detect_products", return_value=[]):
         bbox_image, text, warning, gallery, links_html, state, chatbot = app.on_image_upload(
@@ -114,8 +131,11 @@ def test_on_image_upload_happy_path_builds_gallery_and_state():
     with (
         patch("app.detect_products", return_value=[_sample_detection()]),
         patch("app.detect_color", return_value="빨간"),
+        patch("app.classify_subtype", return_value=None),
+        patch("app.search_similar_text", return_value=[]),
         patch("app.search_naver", return_value=products),
         patch("app.index_products", return_value=2) as mock_index,
+        patch("app.index_product_texts", return_value=2) as mock_index_text,
         patch("app.embed_image", return_value=object()),
         patch("app.search_similar", return_value=products),
     ):
@@ -126,6 +146,7 @@ def test_on_image_upload_happy_path_builds_gallery_and_state():
     assert "빨간색 반팔 셔츠" in text
     assert warning == ""
     assert mock_index.called
+    assert mock_index_text.called
     assert gallery == [
         ("https://example.com/a.jpg", "A 셔츠 - 50,000원"),
         ("https://example.com/b.jpg", "B 셔츠 - 150,000원"),
@@ -135,12 +156,46 @@ def test_on_image_upload_happy_path_builds_gallery_and_state():
     assert state["color"] == "빨간"
 
 
+def test_on_image_upload_uses_local_text_search_and_skips_naver_when_sufficient():
+    local_results = [
+        {
+            "name": f"로컬 상품 {i}",
+            "price": 10000 + i,
+            "image_url": f"https://example.com/{i}.jpg",
+            "purchase_url": f"https://example.com/item/{i}",
+            "source": "naver",
+            "similarity": 0.95,
+        }
+        for i in range(app._LOCAL_SEARCH_MIN_COUNT)
+    ]
+    with (
+        patch("app.detect_products", return_value=[_sample_detection()]),
+        patch("app.detect_color", return_value="빨간"),
+        patch("app.classify_subtype", return_value=None),
+        patch("app.search_similar_text", return_value=local_results),
+        patch("app.search_naver") as mock_search_naver,
+        patch("app.index_products") as mock_index,
+        patch("app.index_product_texts") as mock_index_text,
+        patch("app.embed_image", return_value=object()),
+        patch("app.search_similar", return_value=local_results),
+    ):
+        _, text, warning, gallery, links_html, state, _ = app.on_image_upload(_sample_image())
+
+    assert not mock_search_naver.called  # 로컬 검색이 충분해 네이버 호출 스킵
+    assert not mock_index.called  # 이미 색인된 결과라 재색인 불필요
+    assert not mock_index_text.called
+    assert state["candidate_products"] == local_results
+
+
 def test_on_image_upload_naver_failure_continues_gracefully():
     with (
         patch("app.detect_products", return_value=[_sample_detection()]),
         patch("app.detect_color", return_value="빨간"),
+        patch("app.classify_subtype", return_value=None),
+        patch("app.search_similar_text", return_value=[]),
         patch("app.search_naver", side_effect=NaverAPIError("boom")),
         patch("app.index_products") as mock_index,
+        patch("app.index_product_texts") as mock_index_text,
         patch("app.embed_image", return_value=object()),
         patch("app.search_similar", return_value=[]),
     ):
@@ -151,6 +206,7 @@ def test_on_image_upload_naver_failure_continues_gracefully():
     assert "상품 정보를 가져오지 못했습니다" in warning
     assert "유사 상품을 찾지 못했습니다" in warning
     assert not mock_index.called
+    assert not mock_index_text.called
     assert gallery == []
     assert state["candidate_products"] == []
 
@@ -159,8 +215,11 @@ def test_on_image_upload_no_similar_products_shows_message():
     with (
         patch("app.detect_products", return_value=[_sample_detection()]),
         patch("app.detect_color", return_value="빨간"),
+        patch("app.classify_subtype", return_value=None),
+        patch("app.search_similar_text", return_value=[]),
         patch("app.search_naver", return_value=[]),
         patch("app.index_products") as mock_index,
+        patch("app.index_product_texts") as mock_index_text,
         patch("app.embed_image", return_value=object()),
         patch("app.search_similar", return_value=[]),
     ):
@@ -169,7 +228,31 @@ def test_on_image_upload_no_similar_products_shows_message():
     assert "유사 상품을 찾지 못했습니다" in warning
     assert "상품 정보를 가져오지 못했습니다" not in warning
     assert not mock_index.called
+    assert not mock_index_text.called
     assert gallery == []
+
+
+def test_on_image_upload_uses_subtype_in_description_when_classified():
+    products = _sample_products()
+    detection = {"bbox": (10, 10, 60, 60), "category": "long_sleeved_outwear", "confidence": 0.9}
+    with (
+        patch("app.detect_products", return_value=[detection]),
+        patch("app.detect_color", return_value="남색"),
+        patch("app.classify_subtype", return_value="패딩"),
+        patch("app.search_similar_text", return_value=[]),
+        patch("app.search_naver", return_value=products) as mock_search_naver,
+        patch("app.index_products", return_value=2),
+        patch("app.index_product_texts", return_value=2),
+        patch("app.embed_image", return_value=object()),
+        patch("app.search_similar", return_value=products),
+    ):
+        _, text, warning, gallery, links_html, state, chatbot = app.on_image_upload(
+            _sample_image()
+        )
+
+    assert "남색 패딩" in text
+    assert state["subtype"] == "패딩"
+    assert any("패딩" in call.args[0] for call in mock_search_naver.call_args_list)
 
 
 def test_on_chat_submit_applies_budget_filter():
@@ -214,3 +297,56 @@ def test_on_chat_submit_generate_response_failure_falls_back():
         "content": "죄송해요, 답변을 생성하지 못했습니다.",
     }
     assert new_state["history"][-1] == ("이거 뭐야?", "죄송해요, 답변을 생성하지 못했습니다.")
+
+
+def test_on_chat_submit_freshness_keyword_triggers_live_refresh():
+    state = {
+        "detected_item": _sample_detection(),
+        "color": "빨간",
+        "subtype": None,
+        "candidate_products": _sample_products(),
+        "history": [],
+    }
+    fresh_products = [
+        {
+            "name": "신상 셔츠",
+            "price": 99000,
+            "image_url": "https://example.com/new.jpg",
+            "purchase_url": "https://example.com/item/new",
+            "source": "네이버",
+        }
+    ]
+
+    with (
+        patch("app.search_naver", return_value=fresh_products) as mock_search_naver,
+        patch("app.index_products", return_value=1) as mock_index,
+        patch("app.index_product_texts", return_value=1) as mock_index_text,
+        patch("app.generate_response", return_value="최신 상품으로 갱신했어요."),
+    ):
+        chatbot_messages, cleared_input, new_state, gallery, links_html = app.on_chat_submit(
+            "최신 상품 있어?", [], state
+        )
+
+    assert mock_search_naver.called
+    assert mock_index.called
+    assert mock_index_text.called
+    assert new_state["candidate_products"] == fresh_products
+    assert gallery == [("https://example.com/new.jpg", "신상 셔츠 - 99,000원")]
+
+
+def test_on_chat_submit_without_freshness_keyword_does_not_call_naver():
+    state = {
+        "detected_item": _sample_detection(),
+        "color": "빨간",
+        "subtype": None,
+        "candidate_products": _sample_products(),
+        "history": [],
+    }
+
+    with (
+        patch("app.search_naver") as mock_search_naver,
+        patch("app.generate_response", return_value="42,800원입니다."),
+    ):
+        app.on_chat_submit("얼마야?", [], state)
+
+    assert not mock_search_naver.called

@@ -18,6 +18,75 @@ _MODEL_NAME = "openai/clip-vit-base-patch32"
 _CHROMA_PATH = "data/chroma"
 _COLLECTION_NAME = "product_images"
 
+# DeepFashion2 13개 카테고리는 스펙이 고정한 요구사항이라 탐지 모델 자체는
+# 바꾸지 않는다. 대신 이미 로드된 CLIP의 제로샷 이미지-텍스트 매칭으로 각
+# 카테고리 내 세부 종류(예: "긴팔 아우터" 중 패딩/코트/가디건/자켓)를 추정해
+# 설명/검색어를 더 구체적으로 만든다. CLIP 텍스트 인코더는 영어 중심으로
+# 학습되어 한국어 제로샷 매칭은 신뢰하기 어려우므로, 영어 후보 라벨로 매칭한
+# 뒤 한국어 표시명으로 매핑한다 (영어 라벨, 한국어 표시명) 튜플.
+_SUBTYPE_CANDIDATES = {
+    "short_sleeved_shirt": [
+        ("t-shirt", "티셔츠"),
+        ("polo shirt", "카라 티셔츠"),
+        ("dress shirt", "셔츠"),
+        ("blouse", "블라우스"),
+    ],
+    "long_sleeved_shirt": [
+        ("dress shirt", "셔츠"),
+        ("blouse", "블라우스"),
+        ("knit sweater", "니트"),
+        ("long sleeve t-shirt", "긴팔 티셔츠"),
+    ],
+    "short_sleeved_outwear": [
+        ("vest jacket", "베스트"),
+        ("short cardigan", "가디건"),
+    ],
+    "long_sleeved_outwear": [
+        ("padding jacket", "패딩"),
+        ("coat", "코트"),
+        ("cardigan", "가디건"),
+        ("blazer jacket", "자켓"),
+    ],
+    "vest": [
+        ("vest", "조끼"),
+        ("waistcoat", "베스트"),
+    ],
+    "sling": [
+        ("tank top", "탱크톱"),
+        ("camisole", "캐미솔"),
+    ],
+    "shorts": [
+        ("denim shorts", "청반바지"),
+        ("casual shorts", "반바지"),
+    ],
+    "trousers": [
+        ("jeans", "청바지"),
+        ("slacks", "슬랙스"),
+        ("sweatpants", "조거팬츠"),
+    ],
+    "skirt": [
+        ("mini skirt", "미니스커트"),
+        ("pleated skirt", "플리츠 스커트"),
+        ("long skirt", "롱스커트"),
+    ],
+    "short_sleeved_dress": [
+        ("casual dress", "원피스"),
+        ("shirt dress", "셔츠 원피스"),
+    ],
+    "long_sleeved_dress": [
+        ("sweater dress", "니트 원피스"),
+        ("coat dress", "코트 원피스"),
+    ],
+    "vest_dress": [
+        ("sleeveless dress", "민소매 원피스"),
+        ("pinafore dress", "멜빵 원피스"),
+    ],
+    "sling_dress": [
+        ("slip dress", "슬립 원피스"),
+        ("camisole dress", "캐미솔 원피스"),
+    ],
+}
+
 _model = None
 _processor = None
 _client = None
@@ -52,6 +121,31 @@ def embed_image(image: Image.Image) -> np.ndarray:
     features = output.pooler_output
     features = features / features.norm(p=2, dim=-1, keepdim=True)
     return features.squeeze(0).numpy()
+
+
+def classify_subtype(image_crop: Image.Image, category: str, min_confidence: float = 0.35) -> str | None:
+    """CLIP 제로샷 이미지-텍스트 매칭으로 카테고리 내 세부 종류를 추정한다.
+
+    `category`에 정의된 후보가 없거나, 최고 확률이 `min_confidence` 미만이면
+    `None`을 반환한다 (호출 측은 기존 카테고리 번역으로 안전하게 폴백).
+    """
+    candidates = _SUBTYPE_CANDIDATES.get(category)
+    if not candidates:
+        return None
+
+    model, processor = _get_model()
+    english_labels = [label for label, _ in candidates]
+    inputs = processor(
+        text=english_labels, images=image_crop.convert("RGB"), return_tensors="pt", padding=True
+    )
+    with torch.no_grad():
+        output = model(**inputs)
+
+    probs = output.logits_per_image.softmax(dim=-1).squeeze(0)
+    best_idx = int(probs.argmax().item())
+    if probs[best_idx].item() < min_confidence:
+        return None
+    return candidates[best_idx][1]
 
 
 def _download_image(url: str) -> Image.Image:

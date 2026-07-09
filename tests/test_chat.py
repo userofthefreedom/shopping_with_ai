@@ -38,3 +38,17 @@ def test_build_system_prompt_handles_no_detected_item():
     prompt = _build_system_prompt(context)
 
     assert "인식된 상품: 없음" in prompt
+
+
+def test_build_system_prompt_prefers_subtype_over_category_translation():
+    context = {
+        "detected_item": {"category": "long_sleeved_outwear", "confidence": 0.9},
+        "color": "남색",
+        "subtype": "패딩",
+        "candidate_products": [],
+        "history": [],
+    }
+
+    prompt = _build_system_prompt(context)
+
+    assert "남색 패딩" in prompt

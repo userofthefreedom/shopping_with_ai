@@ -11,6 +11,7 @@ datasets
 ultralytics
 huggingface_hub
 chromadb
+sentence-transformers
 gradio
 langchain
 requests
