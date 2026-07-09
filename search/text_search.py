@@ -22,6 +22,15 @@ _MODEL_NAME = "jhgan/ko-sroberta-multitask"
 _CHROMA_PATH = "data/chroma"
 _COLLECTION_NAME = "product_text"
 
+# 로컬 텍스트 벡터 검색 결과를 "네이버 실시간 검색 없이 써도 될 만큼
+# 충분하다"고 판단하는 기준. 실제 네이버 검색 결과로 실측한 결과(Phase 12,
+# TEST_RESULT.md 참고) 관련 있는 쿼리는 유사도 0.618~0.722, 무관한 쿼리는
+# 0.430~0.483으로 뚜렷이 갈렸다 — CLIP 이미지 유사도(Phase 10, 0.54~0.60에
+# 몰려 못 갈렸음)와 달리 KO-SRoBERTa 텍스트 유사도는 분리가 잘 되어 0.6을
+# 그 사이 값으로 채택.
+_LOCAL_SEARCH_MIN_COUNT = 5
+_LOCAL_SEARCH_MIN_SIMILARITY = 0.6
+
 _model = None
 _client = None
 _collection = None
@@ -132,3 +141,10 @@ def search_similar_text(query: str, top_k: int = 5) -> list[dict]:
         }
         for m, dist in zip(metadatas, distances)
     ]
+
+
+def is_local_search_sufficient(results: list[dict]) -> bool:
+    """로컬 텍스트 벡터 검색 결과만으로 네이버 실시간 검색을 건너뛰어도 될지 판단한다."""
+    if len(results) < _LOCAL_SEARCH_MIN_COUNT:
+        return False
+    return results[0]["similarity"] >= _LOCAL_SEARCH_MIN_SIMILARITY

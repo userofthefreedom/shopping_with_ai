@@ -96,9 +96,13 @@ _collection = None
 def _get_model():
     global _model, _processor
     if _model is None:
-        _model = CLIPModel.from_pretrained(_MODEL_NAME)
-        _model.eval()
-        _processor = CLIPProcessor.from_pretrained(_MODEL_NAME)
+        # 로컬 변수에 먼저 담고 마지막에 한 번에 전역 대입한다 — _model만
+        # 먼저 대입하면, 동시에 들어온 다른 호출이 `if _model is None` 체크를
+        # 통과해 아직 None인 _processor를 반환할 수 있다(레이스 컨디션).
+        model = CLIPModel.from_pretrained(_MODEL_NAME)
+        model.eval()
+        processor = CLIPProcessor.from_pretrained(_MODEL_NAME)
+        _model, _processor = model, processor
     return _model, _processor
 
 

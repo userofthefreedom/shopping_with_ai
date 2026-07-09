@@ -3,9 +3,12 @@
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from dotenv import load_dotenv
+
+from detection.color import search_query_terms
 
 load_dotenv()
 
@@ -16,7 +19,7 @@ _TAG_PATTERN = re.compile(r"</?b>")
 
 
 class NaverAPIError(Exception):
-    """네이버 쇼핑 API 호출 실패 (키 누락, HTTP 오류, 타임아웃 등)."""
+    """네이버 쇼핑 API 호출 실패 (키 누락, HTTP 오류, 타임아웃, 응답 파싱 실패 등)."""
 
 
 def search_naver(query: str, display: int = 20) -> list[dict]:
@@ -40,18 +43,54 @@ def search_naver(query: str, display: int = 20) -> list[dict]:
     try:
         response = requests.get(_SEARCH_URL, headers=headers, params=params, timeout=5)
         response.raise_for_status()
+        items = response.json().get("items", [])
+        return [_parse_item(item) for item in items]
     except requests.RequestException:
         logger.exception("네이버 쇼핑 API 호출 실패 (query=%s)", query)
         raise NaverAPIError("상품 정보를 가져오지 못했습니다.")
+    except (ValueError, TypeError, KeyError):
+        # response.json() 파싱 실패(잘못된 JSON), lprice가 빈 문자열/비숫자인
+        # 경우 등 — 네트워크는 성공했지만 응답 내용이 기대와 다른 경우도
+        # 조용히 넘기지 않고 명시적으로 실패 처리한다.
+        logger.exception("네이버 쇼핑 API 응답 파싱 실패 (query=%s)", query)
+        raise NaverAPIError("상품 정보를 가져오지 못했습니다.")
 
-    items = response.json().get("items", [])
-    return [
-        {
-            "name": _TAG_PATTERN.sub("", item.get("title", "")),
-            "price": int(item.get("lprice", 0)),
-            "image_url": item.get("image", ""),
-            "purchase_url": item.get("link", ""),
-            "source": item.get("mallName", "naver"),
-        }
-        for item in items
-    ]
+
+def _parse_item(item: dict) -> dict:
+    lprice = item.get("lprice") or 0
+    return {
+        "name": _TAG_PATTERN.sub("", item.get("title", "")),
+        "price": int(lprice),
+        "image_url": item.get("image", ""),
+        "purchase_url": item.get("link", ""),
+        "source": item.get("mallName", "naver"),
+    }
+
+
+def search_naver_variants(category: str, color: str, subtype: str | None = None) -> list[dict]:
+    """카테고리 동의어(+CLIP 추정 subtype)별로 네이버 검색을 병렬로 수행해
+    결과를 구매링크 기준으로 합친다.
+
+    DeepFashion2 카테고리 하나(예: short_sleeved_shirt)가 와이셔츠부터
+    그래픽 티셔츠까지 아우르는데, 번역어 하나로만 검색하면 네이버 랭킹이
+    한쪽(주로 정장 셔츠)으로 쏠려 실제로 다른 스타일인 상품을 후보군에서
+    놓친다(Phase 10). 동의어를 함께 검색해 후보군을 넓히되, 검색어별 호출을
+    병렬화해 순차 호출로 인한 응답 지연(Phase 12에서 측정된 cold 경로 지연의
+    주 원인)을 줄인다(Phase 13).
+    """
+    color_ko = color if color.endswith("색") else f"{color}색"
+    terms = search_query_terms(category, subtype)
+
+    with ThreadPoolExecutor(max_workers=min(8, len(terms))) as executor:
+        futures = [executor.submit(search_naver, f"{color_ko} {term}") for term in terms]
+        results_per_term = [future.result() for future in futures]
+
+    seen_urls = set()
+    merged = []
+    for products in results_per_term:
+        for product in products:
+            if product["purchase_url"] in seen_urls:
+                continue
+            seen_urls.add(product["purchase_url"])
+            merged.append(product)
+    return merged
