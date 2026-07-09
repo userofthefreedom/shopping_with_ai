@@ -3,6 +3,7 @@
 import hashlib
 import io
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import chromadb
 import numpy as np
@@ -53,26 +54,66 @@ def embed_image(image: Image.Image) -> np.ndarray:
     return features.squeeze(0).numpy()
 
 
+def _download_image(url: str) -> Image.Image:
+    response = requests.get(url, timeout=5)
+    response.raise_for_status()
+    return Image.open(io.BytesIO(response.content)).convert("RGB")
+
+
 def index_products(products: list[dict], category: str, color: str) -> int:
     """네이버 상품 이미지를 다운로드해 CLIP 임베딩으로 변환 후 ChromaDB에 저장한다.
 
+    이미 색인된 `purchase_url`(id가 동일)인 상품은 재다운로드/재임베딩하지
+    않고 건너뛴다. 남은 상품의 이미지 다운로드는 병렬로 수행한다
+    (Phase 8에서 순차 다운로드가 응답 시간의 99% 이상을 차지하는 병목으로
+    확인됨). CLIP 임베딩 자체는 스레드 세이프성을 보장할 수 없어 병렬화하지
+    않는다 — 다운로드에 비해 이미 충분히 빠르다.
+
     Returns:
-        성공적으로 색인된 상품 수 (이미지 다운로드/임베딩 실패한 상품은 건너뜀).
+        색인된(이미 있었던 것 포함) 상품 수. 이미지 다운로드/임베딩 실패한
+        상품은 제외.
     """
     collection = _get_collection()
-    ids, embeddings, metadatas = [], [], []
+    id_to_product = {_make_id(product): product for product in products}
 
-    for product in products:
+    existing_ids = set()
+    if id_to_product:
+        existing = collection.get(ids=list(id_to_product.keys()))
+        existing_ids = set(existing["ids"])
+
+    to_fetch = {
+        product_id: product
+        for product_id, product in id_to_product.items()
+        if product_id not in existing_ids
+    }
+
+    downloaded = {}
+    if to_fetch:
+        with ThreadPoolExecutor(max_workers=min(8, len(to_fetch))) as executor:
+            future_to_id = {
+                executor.submit(_download_image, product["image_url"]): product_id
+                for product_id, product in to_fetch.items()
+            }
+            for future in as_completed(future_to_id):
+                product_id = future_to_id[future]
+                try:
+                    downloaded[product_id] = future.result()
+                except Exception:
+                    logger.exception(
+                        "상품 이미지 다운로드 실패: %s",
+                        to_fetch[product_id].get("image_url"),
+                    )
+
+    ids, embeddings, metadatas = [], [], []
+    for product_id, image in downloaded.items():
+        product = to_fetch[product_id]
         try:
-            response = requests.get(product["image_url"], timeout=5)
-            response.raise_for_status()
-            image = Image.open(io.BytesIO(response.content))
             embedding = embed_image(image)
         except Exception:
-            logger.exception("상품 이미지 색인 실패: %s", product.get("image_url"))
+            logger.exception("상품 이미지 임베딩 실패: %s", product.get("image_url"))
             continue
 
-        ids.append(_make_id(product))
+        ids.append(product_id)
         embeddings.append(embedding.tolist())
         metadatas.append(
             {
@@ -87,7 +128,7 @@ def index_products(products: list[dict], category: str, color: str) -> int:
 
     if ids:
         collection.upsert(ids=ids, embeddings=embeddings, metadatas=metadatas)
-    return len(ids)
+    return len(existing_ids) + len(ids)
 
 
 def search_similar(image_embedding: np.ndarray, top_k: int = 5) -> list[dict]:

@@ -152,3 +152,27 @@ def test_search_similar_returns_empty_list_when_collection_empty(isolated_chroma
     query_embedding = embed_image(Image.new("RGB", (64, 64), color=(128, 128, 128)))
 
     assert search_similar(query_embedding, top_k=5) == []
+
+
+def test_index_products_skips_already_indexed_purchase_url(isolated_chroma):
+    product = {
+        "name": "레드 셔츠",
+        "price": 10000,
+        "image_url": "https://example.com/red.jpg",
+        "purchase_url": "https://example.com/item/red",
+    }
+
+    def fake_get(url, timeout=5):
+        response = Mock()
+        response.raise_for_status = Mock()
+        response.content = _png_bytes((220, 20, 20))
+        return response
+
+    with patch("search.clip_search.requests.get", side_effect=fake_get) as mock_get:
+        first_count = index_products([product], category="short_sleeved_shirt", color="빨간")
+        assert first_count == 1
+        assert mock_get.call_count == 1
+
+        second_count = index_products([product], category="short_sleeved_shirt", color="빨간")
+        assert second_count == 1
+        assert mock_get.call_count == 1  # 재다운로드 없음
