@@ -1,10 +1,13 @@
 """AI 쇼핑 어시스턴트 Gradio 앱: 업로드 -> 탐지 -> 색상 -> 검색 -> 챗봇/예산 필터 -> 추천."""
 
+import functools
 import html
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import gradio as gr
+from prometheus_client import Counter, Histogram
 from PIL import ImageDraw
 
 from chat.llm import generate_response
@@ -24,6 +27,45 @@ _TOP_K = 5
 _RERANK_POOL_SIZE = 50
 
 _FRESHNESS_KEYWORDS = ("최신", "신상", "재고", "실시간", "현재", "오늘")
+
+IMAGE_UPLOAD_DURATION = Histogram(
+    "shopping_assistant_image_upload_seconds", "이미지 업로드부터 인식/추천 완료까지 소요 시간"
+)
+CHAT_RESPONSE_DURATION = Histogram(
+    "shopping_assistant_chat_response_seconds", "챗봇 응답 생성 소요 시간"
+)
+NAVER_API_CALLS = Counter(
+    "shopping_assistant_naver_api_calls_total", "네이버 쇼핑 API 호출 결과", ["result"]
+)
+
+
+def _timed(histogram):
+    """함수의 모든 반환 경로(조기 반환 포함)에 대해 소요 시간을 히스토그램에 기록한다."""
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            try:
+                return func(*args, **kwargs)
+            finally:
+                histogram.observe(time.perf_counter() - start)
+
+        return wrapper
+
+    return decorator
+
+
+def _search_naver_with_metrics(category, color, subtype):
+    """search_naver_variants를 감싸 성공/실패 카운터를 남긴다. 실패 시 NaverAPIError를
+    그대로 재발생시켜 호출부의 기존 except 처리를 그대로 유지한다."""
+    try:
+        products = search_naver_variants(category, color, subtype)
+        NAVER_API_CALLS.labels(result="success").inc()
+        return products
+    except NaverAPIError:
+        NAVER_API_CALLS.labels(result="failure").inc()
+        raise
 
 _THEME = gr.themes.Base(
     font=[gr.themes.LocalFont("Pretendard"), "-apple-system", "BlinkMacSystemFont", "sans-serif"],
@@ -281,6 +323,7 @@ def _build_product_cards(products):
     return f'<div class="product-grid">{"".join(cards)}</div>'
 
 
+@_timed(IMAGE_UPLOAD_DURATION)
 def on_image_upload(image):
     if image is None:
         return None, "", "", "", _empty_state(), []
@@ -317,7 +360,7 @@ def on_image_upload(image):
         naver_products = local_results
     else:
         try:
-            naver_products = search_naver_variants(detection["category"], color, subtype)
+            naver_products = _search_naver_with_metrics(detection["category"], color, subtype)
         except NaverAPIError:
             naver_products = []
             warnings.append("상품 정보를 가져오지 못했습니다.")
@@ -366,7 +409,7 @@ def on_chat_submit(user_message, chatbot_messages, state):
         color = state.get("color") or ""
         subtype = state.get("subtype")
         try:
-            fresh_products = search_naver_variants(detected_item["category"], color, subtype)
+            fresh_products = _search_naver_with_metrics(detected_item["category"], color, subtype)
         except NaverAPIError:
             logger.exception("챗봇 신선도 재검색 실패")
             fresh_products = []
@@ -389,7 +432,9 @@ def on_chat_submit(user_message, chatbot_messages, state):
     }
 
     try:
+        start = time.perf_counter()
         response = generate_response(user_message, context)
+        CHAT_RESPONSE_DURATION.observe(time.perf_counter() - start)
     except Exception:
         logger.exception("챗봇 응답 생성 실패")
         response = "죄송해요, 답변을 생성하지 못했습니다."

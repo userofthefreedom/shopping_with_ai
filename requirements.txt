@@ -18,3 +18,7 @@ langchain-huggingface
 requests
 python-dotenv
 pytest
+fastapi
+uvicorn
+prometheus-fastapi-instrumentator
+prometheus-client
