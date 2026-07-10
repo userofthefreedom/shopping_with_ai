@@ -1,12 +1,16 @@
+name: ai_mini
+
 services:
   app:
-    build: .
+    build:
+      context: ..
+      dockerfile: Dockerfile
     ports:
       - "7860:7860"
     env_file:
-      - .env
+      - ../.env
     volumes:
-      - ./data/chroma:/app/data/chroma
+      - ../data/chroma:/app/data/chroma
       - ${USERPROFILE}/.cache/huggingface:/root/.cache/huggingface
       - ${USERPROFILE}/.cache/torch:/root/.cache/torch
     deploy:

@@ -39,6 +39,7 @@ ai_mini/
   chat/                      # LLM 챗봇
   data/chroma/               # ChromaDB persist 디렉터리
   tests/                     # 유닛 테스트
+  deploy/                    # Docker/모니터링 배포 설정 (상세: docs/DEPLOYMENT.md)
 ```
 
 ## 시작하기
@@ -85,7 +86,6 @@ cp .env.example .env
 
 ### 4. 실행
 ```bash
-python app.py
 # http://localhost:7860 접속
 ```
 
