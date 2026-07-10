@@ -55,18 +55,44 @@ def test_unlock_chat_input_reenables_and_restores_placeholder():
     assert update["placeholder"] == app._CHAT_PLACEHOLDER
 
 
-def test_build_links_html_escapes_name_and_source():
+def test_build_recognition_badge_escapes_description():
+    result = app._build_recognition_badge("<script>alert(1)</script>")
+
+    assert "<script>" not in result
+    assert "&lt;script&gt;" in result
+    assert 'class="recognition-badge"' in result
+
+
+def test_build_recognition_badge_empty_description_returns_empty_string():
+    assert app._build_recognition_badge("") == ""
+    assert app._build_recognition_badge(None) == ""
+
+
+def test_build_warning_banner_empty_returns_empty_string():
+    assert app._build_warning_banner([]) == ""
+
+
+def test_build_warning_banner_escapes_and_wraps_each_warning():
+    result = app._build_warning_banner(["<script>alert(1)</script>", "두번째 경고"])
+
+    assert "<script>" not in result
+    assert "&lt;script&gt;" in result
+    assert result.count("warning-item") == 2
+    assert "두번째 경고" in result
+
+
+def test_build_product_cards_escapes_name_and_source():
     products = [
         {
-            "name": '<script>alert(1)</script>',
+            "name": "<script>alert(1)</script>",
             "price": 10000,
             "image_url": "https://example.com/a.jpg",
             "purchase_url": "https://example.com/item/a",
-            "source": '<img src=x onerror=alert(1)>',
+            "source": "<img src=x onerror=alert(1)>",
         }
     ]
 
-    result = app._build_links_html(products)
+    result = app._build_product_cards(products)
 
     assert "<script>" not in result
     assert "<img src=x" not in result
@@ -74,7 +100,7 @@ def test_build_links_html_escapes_name_and_source():
     assert "&lt;img src=x onerror=alert(1)&gt;" in result
 
 
-def test_build_links_html_rejects_javascript_scheme_url():
+def test_build_product_cards_rejects_javascript_scheme_url():
     products = [
         {
             "name": "정상 상품",
@@ -85,11 +111,27 @@ def test_build_links_html_rejects_javascript_scheme_url():
         }
     ]
 
-    result = app._build_links_html(products)
+    result = app._build_product_cards(products)
 
     assert "javascript:" not in result
-    assert "정상 상품" not in result  # 스킴이 안전하지 않아 항목 자체를 생략
+    assert "정상 상품" not in result  # 스킴이 안전하지 않아 카드 자체를 생략
 
+
+def test_build_product_cards_empty_products_shows_placeholder():
+    result = app._build_product_cards([])
+
+    assert "product-empty" in result
+
+
+def test_build_product_cards_renders_grid_with_image_name_and_price():
+    products = _sample_products()
+
+    result = app._build_product_cards(products)
+
+    assert result.count("product-card") >= 2
+    assert 'src="https://example.com/a.jpg"' in result
+    assert "A 셔츠" in result
+    assert "50,000원" in result
 
 
 def test_is_freshness_request_detects_keywords():
@@ -112,18 +154,19 @@ def test_empty_state_returns_fresh_history_list_each_call():
 
 def test_on_image_upload_no_detection_shows_message_and_resets_state():
     with patch("app.detect_products", return_value=[]):
-        bbox_image, text, warning, gallery, links_html, state, chatbot = app.on_image_upload(
+        bbox_image, info_html, warning, products_html, state, chatbot = app.on_image_upload(
             _sample_image()
         )
 
-    assert warning == "**주의:** 인식된 상품이 없습니다. 다른 사진을 업로드해보세요."
-    assert gallery == []
-    assert links_html == ""
+    assert "인식된 상품이 없습니다" in warning
+    assert "warning-banner" in warning
+    assert info_html == ""
+    assert "product-empty" in products_html
     assert state["candidate_products"] == []
     assert chatbot[0]["role"] == "assistant"
 
 
-def test_on_image_upload_happy_path_builds_gallery_and_state():
+def test_on_image_upload_happy_path_builds_cards_and_state():
     products = _sample_products()
     with (
         patch("app.detect_products", return_value=[_sample_detection()]),
@@ -136,19 +179,18 @@ def test_on_image_upload_happy_path_builds_gallery_and_state():
         patch("app.embed_image", return_value=object()),
         patch("app.search_similar", return_value=products),
     ):
-        bbox_image, text, warning, gallery, links_html, state, chatbot = app.on_image_upload(
+        bbox_image, info_html, warning, products_html, state, chatbot = app.on_image_upload(
             _sample_image()
         )
 
-    assert "빨간색 반팔 셔츠" in text
+    assert "빨간색 반팔 셔츠" in info_html
+    assert "recognition-badge" in info_html
     assert warning == ""
     assert mock_index.called
     assert mock_index_text.called
-    assert gallery == [
-        ("https://example.com/a.jpg", "A 셔츠 - 50,000원"),
-        ("https://example.com/b.jpg", "B 셔츠 - 150,000원"),
-    ]
-    assert "구매하러 가기" in links_html
+    assert "A 셔츠" in products_html
+    assert "B 셔츠" in products_html
+    assert "구매하러 가기" in products_html
     assert state["candidate_products"] == products
     assert state["color"] == "빨간"
 
@@ -176,7 +218,7 @@ def test_on_image_upload_uses_local_text_search_and_skips_naver_when_sufficient(
         patch("app.embed_image", return_value=object()),
         patch("app.search_similar", return_value=local_results),
     ):
-        _, text, warning, gallery, links_html, state, _ = app.on_image_upload(_sample_image())
+        _, info_html, warning, products_html, state, _ = app.on_image_upload(_sample_image())
 
     assert not mock_search_naver_variants.called  # 로컬 검색이 충분해 네이버 호출 스킵
     assert not mock_index.called  # 이미 색인된 결과라 재색인 불필요
@@ -196,7 +238,7 @@ def test_on_image_upload_naver_failure_continues_gracefully():
         patch("app.embed_image", return_value=object()),
         patch("app.search_similar", return_value=[]),
     ):
-        bbox_image, text, warning, gallery, links_html, state, chatbot = app.on_image_upload(
+        bbox_image, info_html, warning, products_html, state, chatbot = app.on_image_upload(
             _sample_image()
         )
 
@@ -204,7 +246,7 @@ def test_on_image_upload_naver_failure_continues_gracefully():
     assert "유사 상품을 찾지 못했습니다" in warning
     assert not mock_index.called
     assert not mock_index_text.called
-    assert gallery == []
+    assert "product-empty" in products_html
     assert state["candidate_products"] == []
 
 
@@ -220,13 +262,13 @@ def test_on_image_upload_no_similar_products_shows_message():
         patch("app.embed_image", return_value=object()),
         patch("app.search_similar", return_value=[]),
     ):
-        _, text, warning, gallery, links_html, state, _ = app.on_image_upload(_sample_image())
+        _, info_html, warning, products_html, state, _ = app.on_image_upload(_sample_image())
 
     assert "유사 상품을 찾지 못했습니다" in warning
     assert "상품 정보를 가져오지 못했습니다" not in warning
     assert not mock_index.called
     assert not mock_index_text.called
-    assert gallery == []
+    assert "product-empty" in products_html
 
 
 def test_on_image_upload_uses_subtype_in_description_when_classified():
@@ -243,11 +285,11 @@ def test_on_image_upload_uses_subtype_in_description_when_classified():
         patch("app.embed_image", return_value=object()),
         patch("app.search_similar", return_value=products),
     ):
-        _, text, warning, gallery, links_html, state, chatbot = app.on_image_upload(
+        _, info_html, warning, products_html, state, chatbot = app.on_image_upload(
             _sample_image()
         )
 
-    assert "남색 패딩" in text
+    assert "남색 패딩" in info_html
     assert state["subtype"] == "패딩"
     mock_search_naver_variants.assert_called_once_with(detection["category"], "남색", "패딩")
 
@@ -274,14 +316,16 @@ def test_on_image_upload_reranks_scoped_products_by_visual_similarity():
         patch("app.embed_image", return_value=object()),
         patch("app.search_similar", return_value=global_similar),
     ):
-        _, _, warning, gallery, _, state, _ = app.on_image_upload(_sample_image())
+        _, _, warning, products_html, state, _ = app.on_image_upload(_sample_image())
 
     # 무관한 전역 상품은 제외되고, 스코핑된 b만 남는다 (a는 전역 검색에 없어 탈락)
     assert warning == ""
     assert [p["purchase_url"] for p in state["candidate_products"]] == [
         "https://example.com/item/b"
     ]
-    assert gallery == [("https://example.com/b.jpg", "B 셔츠 - 150,000원")]
+    assert "B 셔츠" in products_html
+    assert "무관한 전역 상품" not in products_html
+    assert "A 셔츠" not in products_html
 
 
 def test_on_image_upload_falls_back_to_scoped_when_visual_intersection_empty():
@@ -306,7 +350,7 @@ def test_on_image_upload_falls_back_to_scoped_when_visual_intersection_empty():
         patch("app.embed_image", return_value=object()),
         patch("app.search_similar", return_value=unrelated_global_hits),
     ):
-        _, _, warning, gallery, _, state, _ = app.on_image_upload(_sample_image())
+        _, _, warning, products_html, state, _ = app.on_image_upload(_sample_image())
 
     # 교집합이 비므로 스코핑된 naver 결과(products) 그대로 사용
     assert warning == ""
@@ -314,10 +358,8 @@ def test_on_image_upload_falls_back_to_scoped_when_visual_intersection_empty():
         "https://example.com/item/a",
         "https://example.com/item/b",
     ]
-    assert gallery == [
-        ("https://example.com/a.jpg", "A 셔츠 - 50,000원"),
-        ("https://example.com/b.jpg", "B 셔츠 - 150,000원"),
-    ]
+    assert "A 셔츠" in products_html
+    assert "B 셔츠" in products_html
 
 
 def test_on_chat_submit_applies_budget_filter():
@@ -334,14 +376,15 @@ def test_on_chat_submit_applies_budget_filter():
         return "네, 더 저렴한 상품을 알려드릴게요."
 
     with patch("app.generate_response", side_effect=fake_generate_response):
-        chatbot_messages, cleared_input, new_state, gallery, links_html = app.on_chat_submit(
+        chatbot_messages, cleared_input, new_state, products_html = app.on_chat_submit(
             "10만원 이하로 보여줘", [], state
         )
 
     assert cleared_input == ""
     assert [p["name"] for p in captured_context["candidate_products"]] == ["A 셔츠"]
     assert [p["name"] for p in new_state["candidate_products"]] == ["A 셔츠"]
-    assert gallery == [("https://example.com/a.jpg", "A 셔츠 - 50,000원")]
+    assert "A 셔츠" in products_html
+    assert "B 셔츠" not in products_html
     assert chatbot_messages[-2] == {"role": "user", "content": "10만원 이하로 보여줘"}
     assert chatbot_messages[-1]["role"] == "assistant"
 
@@ -355,7 +398,7 @@ def test_on_chat_submit_generate_response_failure_falls_back():
     }
 
     with patch("app.generate_response", side_effect=RuntimeError("model crashed")):
-        chatbot_messages, _, new_state, _, _ = app.on_chat_submit("이거 뭐야?", [], state)
+        chatbot_messages, _, new_state, _ = app.on_chat_submit("이거 뭐야?", [], state)
 
     assert chatbot_messages[-1] == {
         "role": "assistant",
@@ -388,7 +431,7 @@ def test_on_chat_submit_freshness_keyword_triggers_live_refresh():
         patch("app.index_product_texts", return_value=1) as mock_index_text,
         patch("app.generate_response", return_value="최신 상품으로 갱신했어요."),
     ):
-        chatbot_messages, cleared_input, new_state, gallery, links_html = app.on_chat_submit(
+        chatbot_messages, cleared_input, new_state, products_html = app.on_chat_submit(
             "최신 상품 있어?", [], state
         )
 
@@ -396,7 +439,7 @@ def test_on_chat_submit_freshness_keyword_triggers_live_refresh():
     assert mock_index.called
     assert mock_index_text.called
     assert new_state["candidate_products"] == fresh_products
-    assert gallery == [("https://example.com/new.jpg", "신상 셔츠 - 99,000원")]
+    assert "신상 셔츠" in products_html
 
 
 def test_on_chat_submit_freshness_refresh_failure_logs_exception():
