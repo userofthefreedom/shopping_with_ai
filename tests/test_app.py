@@ -1,10 +1,21 @@
+import importlib.util
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image
 
-import app
 from search import text_search
 from search.naver_api import NaverAPIError
+
+# 진입점 파일명(3_1542353.py)이 숫자로 시작해 식별자로 쓸 수 없어
+# 경로 기반으로 로드하고 sys.modules["app"]에 등록한다
+# (patch("app.xxx") 문자열 패치가 이 이름으로 모듈을 찾기 때문).
+_APP_PATH = Path(__file__).resolve().parent.parent / "3_1542353.py"
+_spec = importlib.util.spec_from_file_location("app", _APP_PATH)
+app = importlib.util.module_from_spec(_spec)
+sys.modules["app"] = app
+_spec.loader.exec_module(app)
 
 
 def _sample_image():

@@ -34,13 +34,13 @@ Gradio 기반 웹 서비스.
 ## 설치 / 실행 / 테스트 / 빌드 명령어
 - conda 환경 활성화: `conda activate shopping_assistant`
 - 설치: `pip install -r requirements.txt` (conda 환경 활성화 후 실행)
-- 실행: `python app.py` (localhost:7860)
+- 실행: `python 3_1542353.py` (localhost:7860)
 - 테스트: `pytest` (Phase별 유닛 테스트는 `tests/` 아래에 작성)
 - 별도 빌드 단계 없음 (Docker화는 Phase 9 배포 단계에서만 다룸)
 
 ## 코드 스타일과 컨벤션
 - 모듈 단위로 분리: 탐지(detection), 색상(color), 검색(search/recommend),
-  챗봇(chat), API 연동(integrations), UI(app.py)는 각각 별도 파일/패키지로 둔다.
+  챗봇(chat), API 연동(integrations), UI(3_1542353.py)는 각각 별도 파일/패키지로 둔다.
 - 함수/파일 이름은 영문, 사용자 노출 문자열(챗봇 응답, UI 라벨)은 한국어.
 - 예외 상황은 조용히 무시하지 않고 명시적으로 처리하거나 로그를 남긴다.
 

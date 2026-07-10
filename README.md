@@ -87,7 +87,7 @@ cp .env.example .env
 
 ### 4) 실행
 ```bash
-python app.py
+python 3_1542353.py
 # http://localhost:7860 접속
 ```
 
@@ -158,7 +158,7 @@ YOLOv8 탐지 (bbox + 13개 패션 카테고리)
 ### 3.2 프로젝트 구조
 ```
 ai_mini/
-  app.py                     # Gradio 앱 진입점 — 업로드→탐지→검색→챗봇→추천 흐름 전체를 연결
+  3_1542353.py               # Gradio 앱 진입점 — 업로드→탐지→검색→챗봇→추천 흐름 전체를 연결
   requirements.txt
   .env.example
   detection/                 # YOLOv8 탐지(detect.py), 색상 인식(color.py)

@@ -9,7 +9,7 @@ Docker + FastAPI + Prometheus/Grafana로 로컬에서 전체 스택을 구동하
 ai_mini/
   .dockerignore           # 빌드 컨텍스트 루트에 위치해야 해서 루트에 유지
   deploy/
-    server.py              # app.py의 Gradio Blocks를 FastAPI에 마운트 (+ /health, /metrics)
+    server.py              # 3_1542353.py의 Gradio Blocks를 FastAPI에 마운트 (+ /health, /metrics)
     Dockerfile              # nvidia/cuda 베이스, Python 3.10, uvicorn deploy.server:app 실행
     docker-compose.yml       # app + prometheus + grafana
     prometheus/prometheus.yml
@@ -19,10 +19,11 @@ ai_mini/
 배포 관련 파일은 `deploy/` 아래 모아 두었습니다 — 아래 모든 `docker compose`
 명령은 **프로젝트 루트에서 `cd deploy`한 뒤** 실행합니다.
 
-- `app.py`의 로직/UI는 변경하지 않았습니다. `server.py`는 `app.py`의 `demo`
-  (gr.Blocks)를 그대로 import해 FastAPI 위에 마운트만 합니다.
+- `3_1542353.py`의 로직/UI는 변경하지 않았습니다. `server.py`는 `3_1542353.py`의
+  `demo`(gr.Blocks)를 그대로 import해 FastAPI 위에 마운트만 합니다 (파일명이
+  숫자로 시작해 `importlib`로 경로 기반 로드합니다).
 - 이미지 인식 소요 시간, 챗봇 응답 생성 시간, 네이버 API 호출 성공/실패 수를
-  Prometheus 커스텀 메트릭으로 계측합니다 (`app.py`의
+  Prometheus 커스텀 메트릭으로 계측합니다 (`3_1542353.py`의
   `IMAGE_UPLOAD_DURATION`/`CHAT_RESPONSE_DURATION`/`NAVER_API_CALLS`).
 
 ## 사전 준비

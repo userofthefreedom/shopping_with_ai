@@ -125,7 +125,7 @@ def search_similar_text(query: str, top_k: int = 5) -> list[dict]:
     """쿼리와 의미적으로 유사한 상위 top_k개의 Product를 반환한다.
 
     반환되는 각 dict는 SPEC §2의 Product 계약에 `similarity`(코사인 유사도,
-    1에 가까울수록 유사)를 추가로 포함한다 — 호출 측(app.py)이 결과가
+    1에 가까울수록 유사)를 추가로 포함한다 — 호출 측(3_1542353.py)이 결과가
     "충분히 신뢰할만한지" 판단해 네이버 실시간 검색으로 폴백할지 정하는 데
     사용한다.
     """
