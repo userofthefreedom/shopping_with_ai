@@ -343,10 +343,23 @@ def on_image_upload(image):
 
     detection = max(detections, key=lambda d: d["confidence"])
     bbox = detection["bbox"]
-    color = detect_color(image, bbox)
-    cropped = image.convert("RGB").crop(tuple(int(round(v)) for v in bbox))
-    subtype = classify_subtype(cropped, detection["category"])
-    description = describe_item(detection["category"], color, subtype)
+    try:
+        color = detect_color(image, bbox)
+        cropped = image.convert("RGB").crop(tuple(int(round(v)) for v in bbox))
+        subtype = classify_subtype(cropped, detection["category"])
+        description = describe_item(detection["category"], color, subtype)
+    except Exception:
+        logger.exception("탐지된 영역 처리 실패(색상/세부종류 인식)")
+        message = "상품 정보를 처리하는 중 문제가 발생했습니다. 다른 사진을 업로드해보세요."
+        chatbot = [{"role": "assistant", "content": message}]
+        return (
+            image,
+            "",
+            _build_warning_banner([message]),
+            _build_product_cards([]),
+            _empty_state(),
+            chatbot,
+        )
 
     info_html = _build_recognition_badge(description)
     warnings = []
@@ -405,6 +418,7 @@ def on_chat_submit(user_message, chatbot_messages, state):
     candidate_products = state.get("candidate_products", [])
 
     detected_item = state.get("detected_item")
+    freshness_search_failed = False
     if detected_item and _is_freshness_request(user_message):
         color = state.get("color") or ""
         subtype = state.get("subtype")
@@ -413,6 +427,7 @@ def on_chat_submit(user_message, chatbot_messages, state):
         except NaverAPIError:
             logger.exception("챗봇 신선도 재검색 실패")
             fresh_products = []
+            freshness_search_failed = True
         if fresh_products:
             _index_products_everywhere(fresh_products, detected_item["category"], color)
             candidate_products = fresh_products
@@ -431,13 +446,17 @@ def on_chat_submit(user_message, chatbot_messages, state):
         "history": state.get("history", []),
     }
 
+    start = time.perf_counter()
     try:
-        start = time.perf_counter()
         response = generate_response(user_message, context)
-        CHAT_RESPONSE_DURATION.observe(time.perf_counter() - start)
     except Exception:
         logger.exception("챗봇 응답 생성 실패")
         response = "죄송해요, 답변을 생성하지 못했습니다."
+    finally:
+        CHAT_RESPONSE_DURATION.observe(time.perf_counter() - start)
+
+    if freshness_search_failed:
+        response = "(실시간 재고 확인에 실패해 이전 추천 기준으로 답변드려요.) " + response
 
     state.setdefault("history", []).append((user_message, response))
     chatbot_messages.append({"role": "user", "content": user_message})

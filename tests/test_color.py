@@ -46,6 +46,11 @@ def test_describe_item_falls_back_to_raw_category_when_unknown():
     assert describe_item("unknown_category", "파란") == "파란색 unknown_category"
 
 
+def test_describe_item_omits_color_when_color_is_empty():
+    # color=""면 "색"만 붙는 깨진 한국어("색 반팔 셔츠")가 되지 않아야 한다
+    assert describe_item("short_sleeved_shirt", "") == "반팔 셔츠"
+
+
 def test_search_query_terms_returns_synonyms_for_ambiguous_shirt_category():
     assert search_query_terms("short_sleeved_shirt") == ["반팔 셔츠", "반팔 티셔츠"]
 

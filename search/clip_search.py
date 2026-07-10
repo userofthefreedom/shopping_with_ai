@@ -109,10 +109,12 @@ def _get_model():
 def _get_collection():
     global _client, _collection
     if _collection is None:
-        _client = chromadb.PersistentClient(path=_CHROMA_PATH)
-        _collection = _client.get_or_create_collection(
+        # _get_model()과 동일한 이유로 로컬 변수에 먼저 담고 한 번에 대입한다.
+        client = chromadb.PersistentClient(path=_CHROMA_PATH)
+        collection = client.get_or_create_collection(
             name=_COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
         )
+        _client, _collection = client, collection
     return _collection
 
 

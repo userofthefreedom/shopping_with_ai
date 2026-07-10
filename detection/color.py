@@ -52,6 +52,8 @@ def describe_item(category: str, color: str, subtype: str | None = None) -> str:
     대신 더 구체적인 subtype을 사용한다. subtype이 없으면 기존 동작과 동일.
     """
     category_ko = subtype or _CATEGORY_KO.get(category, category)
+    if not color:
+        return category_ko
     color_ko = color if color.endswith("색") else f"{color}색"
     return f"{color_ko} {category_ko}"
 

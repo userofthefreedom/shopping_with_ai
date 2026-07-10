@@ -44,16 +44,24 @@ def search_naver(query: str, display: int = 20) -> list[dict]:
         response = requests.get(_SEARCH_URL, headers=headers, params=params, timeout=5)
         response.raise_for_status()
         items = response.json().get("items", [])
-        return [_parse_item(item) for item in items]
     except requests.RequestException:
         logger.exception("네이버 쇼핑 API 호출 실패 (query=%s)", query)
         raise NaverAPIError("상품 정보를 가져오지 못했습니다.")
     except (ValueError, TypeError, KeyError):
-        # response.json() 파싱 실패(잘못된 JSON), lprice가 빈 문자열/비숫자인
-        # 경우 등 — 네트워크는 성공했지만 응답 내용이 기대와 다른 경우도
-        # 조용히 넘기지 않고 명시적으로 실패 처리한다.
+        # response.json() 파싱 실패(잘못된 JSON) 등 응답 전체가 기대와 다른
+        # 경우 — 조용히 넘기지 않고 명시적으로 실패 처리한다.
         logger.exception("네이버 쇼핑 API 응답 파싱 실패 (query=%s)", query)
         raise NaverAPIError("상품 정보를 가져오지 못했습니다.")
+
+    products = []
+    for item in items:
+        try:
+            products.append(_parse_item(item))
+        except (ValueError, TypeError, KeyError):
+            # 항목 하나가 예상과 다른 형태(title/lprice가 null 등)라고 해서
+            # 이미 정상 파싱된 나머지 항목까지 통째로 버리지 않는다.
+            logger.exception("네이버 쇼핑 API 항목 파싱 실패, 건너뜀 (query=%s)", query)
+    return products
 
 
 def _parse_item(item: dict) -> dict:
@@ -82,8 +90,19 @@ def search_naver_variants(category: str, color: str, subtype: str | None = None)
     terms = search_query_terms(category, subtype)
 
     with ThreadPoolExecutor(max_workers=min(8, len(terms))) as executor:
-        futures = [executor.submit(search_naver, f"{color_ko} {term}") for term in terms]
-        results_per_term = [future.result() for future in futures]
+        future_to_term = {
+            executor.submit(search_naver, f"{color_ko} {term}"): term for term in terms
+        }
+        results_per_term = []
+        for future in future_to_term:
+            try:
+                results_per_term.append(future.result())
+            except NaverAPIError:
+                # 동의어 중 하나의 검색이 실패해도 나머지 동의어의 성공한
+                # 결과까지 통째로 버리지 않는다.
+                logger.exception(
+                    "동의어 검색 실패, 해당 검색어만 건너뜀 (term=%s)", future_to_term[future]
+                )
 
     seen_urls = set()
     merged = []

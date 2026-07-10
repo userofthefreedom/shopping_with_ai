@@ -4,7 +4,7 @@ services:
   app:
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: deploy/Dockerfile
     ports:
       - "7860:7860"
     env_file:
@@ -23,7 +23,7 @@ services:
     restart: unless-stopped
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.13.0
     ports:
       - "9090:9090"
     volumes:
@@ -31,7 +31,7 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.1.0
     ports:
       - "3001:3000"
     environment:

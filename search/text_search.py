@@ -12,6 +12,7 @@ import logging
 
 import chromadb
 import numpy as np
+import torch
 from sentence_transformers import SentenceTransformer
 
 from search.clip_search import _make_id
@@ -39,17 +40,21 @@ _collection = None
 def _get_model():
     global _model
     if _model is None:
-        _model = SentenceTransformer(_MODEL_NAME, device="cuda")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _model = SentenceTransformer(_MODEL_NAME, device=device)
     return _model
 
 
 def _get_collection():
     global _client, _collection
     if _collection is None:
-        _client = chromadb.PersistentClient(path=_CHROMA_PATH)
-        _collection = _client.get_or_create_collection(
+        # 로컬 변수에 먼저 담고 한 번에 대입해 TOCTOU 레이스를 피한다
+        # (clip_search.py의 _get_model()/_get_collection()과 동일한 패턴).
+        client = chromadb.PersistentClient(path=_CHROMA_PATH)
+        collection = client.get_or_create_collection(
             name=_COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
         )
+        _client, _collection = client, collection
     return _collection
 
 
@@ -71,7 +76,13 @@ def index_product_texts(products: list[dict], category: str, color: str) -> int:
         색인된(이미 있었던 것 포함) 상품 수. 임베딩 실패한 상품은 제외.
     """
     collection = _get_collection()
-    id_to_product = {_make_id(product): product for product in products}
+    valid_products = [p for p in products if p.get("purchase_url")]
+    skipped = len(products) - len(valid_products)
+    if skipped:
+        # purchase_url이 빈 상품은 전부 같은 해시로 id가 겹쳐 서로 덮어쓴다
+        # (clip_search.index_products와 동일한 이유로 색인 전에 제외).
+        logger.warning("purchase_url이 없는 상품 %d건을 텍스트 색인에서 제외함", skipped)
+    id_to_product = {_make_id(product): product for product in valid_products}
 
     existing_ids = set()
     if id_to_product:

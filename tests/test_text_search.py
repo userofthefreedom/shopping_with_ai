@@ -56,6 +56,33 @@ def test_index_product_texts_and_search_similar_text_orders_by_similarity(isolat
     assert results[0]["similarity"] > results[1]["similarity"]
 
 
+def test_index_product_texts_skips_products_with_empty_purchase_url(isolated_chroma):
+    products = [
+        {
+            "name": "정상 상품",
+            "price": 10000,
+            "image_url": "https://example.com/red.jpg",
+            "purchase_url": "https://example.com/item/red",
+        },
+        {
+            "name": "구매링크 없는 상품 1",
+            "price": 20000,
+            "image_url": "https://example.com/a.jpg",
+            "purchase_url": "",
+        },
+        {
+            "name": "구매링크 없는 상품 2",
+            "price": 30000,
+            "image_url": "https://example.com/b.jpg",
+            "purchase_url": "",
+        },
+    ]
+
+    indexed_count = index_product_texts(products, category="short_sleeved_shirt", color="빨간")
+
+    assert indexed_count == 1  # 빈 purchase_url 상품 2건은 제외(id 충돌 방지)
+
+
 def test_index_product_texts_skips_already_indexed_purchase_url(isolated_chroma):
     product = {
         "name": "빨간색 반팔 셔츠",

@@ -166,6 +166,21 @@ def test_on_image_upload_no_detection_shows_message_and_resets_state():
     assert chatbot[0]["role"] == "assistant"
 
 
+def test_on_image_upload_handles_unexpected_exception_in_recognition_step():
+    with (
+        patch("app.detect_products", return_value=[_sample_detection()]),
+        patch("app.detect_color", side_effect=ValueError("bbox 영역이 비어 있습니다")),
+    ):
+        bbox_image, info_html, warning, products_html, state, chatbot = app.on_image_upload(
+            _sample_image()
+        )
+
+    assert "문제가 발생했습니다" in warning
+    assert info_html == ""
+    assert state["candidate_products"] == []
+    assert chatbot[0]["role"] == "assistant"
+
+
 def test_on_image_upload_happy_path_builds_cards_and_state():
     products = _sample_products()
     with (
@@ -459,6 +474,24 @@ def test_on_chat_submit_freshness_refresh_failure_logs_exception():
         app.on_chat_submit("최신 상품 있어?", [], state)
 
     assert mock_logger.exception.called
+
+
+def test_on_chat_submit_freshness_refresh_failure_notifies_user_in_response():
+    state = {
+        "detected_item": _sample_detection(),
+        "color": "빨간",
+        "subtype": None,
+        "candidate_products": _sample_products(),
+        "history": [],
+    }
+
+    with (
+        patch("app.search_naver_variants", side_effect=NaverAPIError("boom")),
+        patch("app.generate_response", return_value="42,800원입니다."),
+    ):
+        chatbot_messages, _, _, _ = app.on_chat_submit("최신 상품 있어?", [], state)
+
+    assert "실시간 재고 확인에 실패" in chatbot_messages[-1]["content"]
 
 
 def test_on_chat_submit_without_freshness_keyword_does_not_call_naver():

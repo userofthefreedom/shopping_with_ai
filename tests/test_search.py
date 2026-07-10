@@ -122,6 +122,57 @@ def test_search_naver_treats_blank_lprice_as_zero(monkeypatch):
     assert products[0]["price"] == 0
 
 
+def test_search_naver_skips_malformed_item_but_keeps_other_items(monkeypatch):
+    _fake_env(monkeypatch)
+    mock_response = Mock()
+    mock_response.raise_for_status = Mock()
+    mock_response.json.return_value = {
+        "items": [
+            {
+                "title": None,  # _TAG_PATTERN.sub()가 TypeError를 던짐
+                "link": "https://example.com/item/broken",
+                "image": "https://example.com/broken.jpg",
+                "lprice": "10000",
+                "mallName": "네이버",
+            },
+            {
+                "title": "정상 상품",
+                "link": "https://example.com/item/ok",
+                "image": "https://example.com/ok.jpg",
+                "lprice": "20000",
+                "mallName": "네이버",
+            },
+        ]
+    }
+
+    with patch("search.naver_api.requests.get", return_value=mock_response):
+        products = search_naver("빨간색 반팔 셔츠")
+
+    assert len(products) == 1  # 잘못된 항목 1건은 건너뛰고 정상 항목만 반환
+    assert products[0]["name"] == "정상 상품"
+
+
+def test_search_naver_variants_keeps_successful_synonyms_when_one_fails():
+    def fake_search_naver(query):
+        if "티셔츠" in query:
+            raise NaverAPIError("타임아웃")
+        return [
+            {
+                "name": "셔츠 상품",
+                "price": 20000,
+                "image_url": "https://example.com/shirt.jpg",
+                "purchase_url": "https://example.com/item/shirt",
+                "source": "네이버",
+            }
+        ]
+
+    with patch("search.naver_api.search_naver", side_effect=fake_search_naver):
+        merged = search_naver_variants("short_sleeved_shirt", "파란")
+
+    # "반팔 티셔츠" 검색만 실패해도 "반팔 셔츠" 검색 결과는 유실되지 않는다
+    assert [p["purchase_url"] for p in merged] == ["https://example.com/item/shirt"]
+
+
 def test_search_naver_variants_merges_synonym_queries_deduped():
     calls = []
 

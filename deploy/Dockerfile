@@ -5,8 +5,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 python3-pip python3.10-venv \
-    libgl1 libglib2.0-0 \
+    python3.10 python3-pip \
+    libgl1 libglib2.0-0 curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN ln -sf /usr/bin/python3.10 /usr/bin/python
@@ -22,5 +22,8 @@ RUN python -m pip install --upgrade pip && \
 COPY . .
 
 EXPOSE 7860
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:7860/health || exit 1
 
 CMD ["python", "-m", "uvicorn", "deploy.server:app", "--host", "0.0.0.0", "--port", "7860"]
