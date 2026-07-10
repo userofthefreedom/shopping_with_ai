@@ -4,7 +4,12 @@ import numpy as np
 import pytest
 
 from search import text_search
-from search.text_search import embed_text, index_product_texts, search_similar_text
+from search.text_search import (
+    embed_text,
+    index_product_texts,
+    is_local_search_sufficient,
+    search_similar_text,
+)
 
 
 @pytest.fixture
@@ -75,3 +80,13 @@ def test_index_product_texts_skips_already_indexed_purchase_url(isolated_chroma)
 
 def test_search_similar_text_returns_empty_list_when_collection_empty(isolated_chroma):
     assert search_similar_text("빨간 티셔츠", top_k=5) == []
+
+
+def test_is_local_search_sufficient_requires_min_count_and_similarity():
+    high_sim_results = [{"similarity": 0.9}] * text_search._LOCAL_SEARCH_MIN_COUNT
+
+    assert is_local_search_sufficient(high_sim_results) is True
+    assert is_local_search_sufficient(high_sim_results[:-1]) is False  # 개수 부족
+
+    low_sim_results = [{"similarity": 0.1}] * text_search._LOCAL_SEARCH_MIN_COUNT
+    assert is_local_search_sufficient(low_sim_results) is False  # 유사도 부족

@@ -18,14 +18,18 @@ def parse_budget(text: str) -> dict | None:
     if max_price is not None and any(kw in text for kw in _UNDER_KEYWORDS):
         return {"max_price": max_price, "mode": "under"}
     if any(kw in text for kw in _CHEAPER_KEYWORDS):
-        return {"max_price": None, "mode": "cheaper"}
+        # "3만원보다 더 싸게"처럼 "더 싸게" 계열 키워드와 명시적 금액이 함께
+        # 오면 mode는 "cheaper"지만 파싱된 max_price도 그대로 넘긴다 (금액이
+        # 없으면 None 유지 — 순수 "더 저렴한 거 있어?" 케이스).
+        return {"max_price": max_price, "mode": "cheaper"}
     return None
 
 
 def filter_by_budget(products: list[dict], condition: dict | None) -> list[dict]:
     """예산 조건에 맞는 상품만 남기고 가격 오름차순으로 정렬한다."""
-    if condition and condition.get("mode") == "under" and condition.get("max_price") is not None:
-        filtered = [p for p in products if p["price"] <= condition["max_price"]]
+    max_price = condition.get("max_price") if condition else None
+    if max_price is not None:
+        filtered = [p for p in products if p["price"] <= max_price]
     else:
         filtered = list(products)
     return sorted(filtered, key=lambda p: p["price"])

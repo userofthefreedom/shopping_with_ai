@@ -14,6 +14,7 @@ chromadb
 sentence-transformers
 gradio
 langchain
+langchain-huggingface
 requests
 python-dotenv
 pytest

@@ -32,6 +32,30 @@ def test_parse_budget_returns_none_for_unmatched_text(text):
     assert parse_budget(text) is None
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("3만원보다 더 싸게", {"max_price": 30000, "mode": "cheaper"}),
+        ("10만원보다 더 저렴한 거 있어?", {"max_price": 100000, "mode": "cheaper"}),
+    ],
+)
+def test_parse_budget_keeps_amount_with_cheaper_keyword(text, expected):
+    assert parse_budget(text) == expected
+
+
+def test_filter_by_budget_filters_even_in_cheaper_mode_when_amount_present():
+    products = [
+        {"name": "A", "price": 150000},
+        {"name": "B", "price": 50000},
+        {"name": "C", "price": 200000},
+    ]
+    condition = {"max_price": 100000, "mode": "cheaper"}
+
+    result = filter_by_budget(products, condition)
+
+    assert [p["name"] for p in result] == ["B"]
+
+
 def test_filter_by_budget_filters_and_sorts_ascending():
     products = [
         {"name": "A", "price": 150000},

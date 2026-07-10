@@ -3,6 +3,7 @@ from unittest.mock import patch
 from PIL import Image
 
 import app
+from search import text_search
 from search.naver_api import NaverAPIError
 
 
@@ -54,56 +55,41 @@ def test_unlock_chat_input_reenables_and_restores_placeholder():
     assert update["placeholder"] == app._CHAT_PLACEHOLDER
 
 
-def test_search_naver_variants_merges_synonym_queries_deduped():
-    calls = []
-
-    def fake_search_naver(query):
-        calls.append(query)
-        if "티셔츠" in query:
-            return [
-                {
-                    "name": "티셔츠 상품",
-                    "price": 10000,
-                    "image_url": "https://example.com/tee.jpg",
-                    "purchase_url": "https://example.com/item/tee",
-                    "source": "네이버",
-                }
-            ]
-        return [
-            {
-                "name": "셔츠 상품",
-                "price": 20000,
-                "image_url": "https://example.com/shirt.jpg",
-                "purchase_url": "https://example.com/item/shirt",
-                "source": "네이버",
-            },
-            {
-                "name": "중복 상품(티셔츠 검색에서도 잡힘)",
-                "price": 10000,
-                "image_url": "https://example.com/tee.jpg",
-                "purchase_url": "https://example.com/item/tee",
-                "source": "네이버",
-            },
-        ]
-
-    with patch("app.search_naver", side_effect=fake_search_naver):
-        merged = app._search_naver_variants("short_sleeved_shirt", "파란")
-
-    assert calls == ["파란색 반팔 셔츠", "파란색 반팔 티셔츠"]
-    assert [p["purchase_url"] for p in merged] == [
-        "https://example.com/item/shirt",
-        "https://example.com/item/tee",
+def test_build_links_html_escapes_name_and_source():
+    products = [
+        {
+            "name": '<script>alert(1)</script>',
+            "price": 10000,
+            "image_url": "https://example.com/a.jpg",
+            "purchase_url": "https://example.com/item/a",
+            "source": '<img src=x onerror=alert(1)>',
+        }
     ]
 
+    result = app._build_links_html(products)
 
-def test_is_local_search_sufficient_requires_min_count_and_similarity():
-    high_sim_results = [{"similarity": 0.9}] * app._LOCAL_SEARCH_MIN_COUNT
+    assert "<script>" not in result
+    assert "<img src=x" not in result
+    assert "&lt;script&gt;" in result
+    assert "&lt;img src=x onerror=alert(1)&gt;" in result
 
-    assert app._is_local_search_sufficient(high_sim_results) is True
-    assert app._is_local_search_sufficient(high_sim_results[:-1]) is False  # 개수 부족
 
-    low_sim_results = [{"similarity": 0.1}] * app._LOCAL_SEARCH_MIN_COUNT
-    assert app._is_local_search_sufficient(low_sim_results) is False  # 유사도 부족
+def test_build_links_html_rejects_javascript_scheme_url():
+    products = [
+        {
+            "name": "정상 상품",
+            "price": 10000,
+            "image_url": "https://example.com/a.jpg",
+            "purchase_url": "javascript:alert(1)",
+            "source": "naver",
+        }
+    ]
+
+    result = app._build_links_html(products)
+
+    assert "javascript:" not in result
+    assert "정상 상품" not in result  # 스킴이 안전하지 않아 항목 자체를 생략
+
 
 
 def test_is_freshness_request_detects_keywords():
@@ -113,13 +99,24 @@ def test_is_freshness_request_detects_keywords():
     assert app._is_freshness_request("10만원 이하로 보여줘") is False
 
 
+def test_empty_state_returns_fresh_history_list_each_call():
+    first = app._empty_state()
+    second = app._empty_state()
+
+    assert first["history"] is not second["history"]
+
+    first["history"].append(("이거 뭐야?", "답변"))
+
+    assert second["history"] == []
+
+
 def test_on_image_upload_no_detection_shows_message_and_resets_state():
     with patch("app.detect_products", return_value=[]):
         bbox_image, text, warning, gallery, links_html, state, chatbot = app.on_image_upload(
             _sample_image()
         )
 
-    assert "인식된 상품이 없습니다" in warning
+    assert warning == "**주의:** 인식된 상품이 없습니다. 다른 사진을 업로드해보세요."
     assert gallery == []
     assert links_html == ""
     assert state["candidate_products"] == []
@@ -133,7 +130,7 @@ def test_on_image_upload_happy_path_builds_gallery_and_state():
         patch("app.detect_color", return_value="빨간"),
         patch("app.classify_subtype", return_value=None),
         patch("app.search_similar_text", return_value=[]),
-        patch("app.search_naver", return_value=products),
+        patch("app.search_naver_variants", return_value=products),
         patch("app.index_products", return_value=2) as mock_index,
         patch("app.index_product_texts", return_value=2) as mock_index_text,
         patch("app.embed_image", return_value=object()),
@@ -166,14 +163,14 @@ def test_on_image_upload_uses_local_text_search_and_skips_naver_when_sufficient(
             "source": "naver",
             "similarity": 0.95,
         }
-        for i in range(app._LOCAL_SEARCH_MIN_COUNT)
+        for i in range(text_search._LOCAL_SEARCH_MIN_COUNT)
     ]
     with (
         patch("app.detect_products", return_value=[_sample_detection()]),
         patch("app.detect_color", return_value="빨간"),
         patch("app.classify_subtype", return_value=None),
         patch("app.search_similar_text", return_value=local_results),
-        patch("app.search_naver") as mock_search_naver,
+        patch("app.search_naver_variants") as mock_search_naver_variants,
         patch("app.index_products") as mock_index,
         patch("app.index_product_texts") as mock_index_text,
         patch("app.embed_image", return_value=object()),
@@ -181,7 +178,7 @@ def test_on_image_upload_uses_local_text_search_and_skips_naver_when_sufficient(
     ):
         _, text, warning, gallery, links_html, state, _ = app.on_image_upload(_sample_image())
 
-    assert not mock_search_naver.called  # 로컬 검색이 충분해 네이버 호출 스킵
+    assert not mock_search_naver_variants.called  # 로컬 검색이 충분해 네이버 호출 스킵
     assert not mock_index.called  # 이미 색인된 결과라 재색인 불필요
     assert not mock_index_text.called
     assert state["candidate_products"] == local_results
@@ -193,7 +190,7 @@ def test_on_image_upload_naver_failure_continues_gracefully():
         patch("app.detect_color", return_value="빨간"),
         patch("app.classify_subtype", return_value=None),
         patch("app.search_similar_text", return_value=[]),
-        patch("app.search_naver", side_effect=NaverAPIError("boom")),
+        patch("app.search_naver_variants", side_effect=NaverAPIError("boom")),
         patch("app.index_products") as mock_index,
         patch("app.index_product_texts") as mock_index_text,
         patch("app.embed_image", return_value=object()),
@@ -217,7 +214,7 @@ def test_on_image_upload_no_similar_products_shows_message():
         patch("app.detect_color", return_value="빨간"),
         patch("app.classify_subtype", return_value=None),
         patch("app.search_similar_text", return_value=[]),
-        patch("app.search_naver", return_value=[]),
+        patch("app.search_naver_variants", return_value=[]),
         patch("app.index_products") as mock_index,
         patch("app.index_product_texts") as mock_index_text,
         patch("app.embed_image", return_value=object()),
@@ -240,7 +237,7 @@ def test_on_image_upload_uses_subtype_in_description_when_classified():
         patch("app.detect_color", return_value="남색"),
         patch("app.classify_subtype", return_value="패딩"),
         patch("app.search_similar_text", return_value=[]),
-        patch("app.search_naver", return_value=products) as mock_search_naver,
+        patch("app.search_naver_variants", return_value=products) as mock_search_naver_variants,
         patch("app.index_products", return_value=2),
         patch("app.index_product_texts", return_value=2),
         patch("app.embed_image", return_value=object()),
@@ -252,7 +249,75 @@ def test_on_image_upload_uses_subtype_in_description_when_classified():
 
     assert "남색 패딩" in text
     assert state["subtype"] == "패딩"
-    assert any("패딩" in call.args[0] for call in mock_search_naver.call_args_list)
+    mock_search_naver_variants.assert_called_once_with(detection["category"], "남색", "패딩")
+
+
+def test_on_image_upload_reranks_scoped_products_by_visual_similarity():
+    products = _sample_products()  # a, b
+    irrelevant_global_hit = {
+        "name": "무관한 전역 상품",
+        "price": 5000,
+        "image_url": "https://example.com/irrelevant.jpg",
+        "purchase_url": "https://example.com/item/irrelevant",
+        "source": "naver",
+    }
+    # 전역 컬렉션 검색 결과: 무관한 상품이 먼저, 스코핑된 b가 그다음, a는 없음
+    global_similar = [irrelevant_global_hit, products[1]]
+    with (
+        patch("app.detect_products", return_value=[_sample_detection()]),
+        patch("app.detect_color", return_value="빨간"),
+        patch("app.classify_subtype", return_value=None),
+        patch("app.search_similar_text", return_value=[]),
+        patch("app.search_naver_variants", return_value=products),
+        patch("app.index_products", return_value=2),
+        patch("app.index_product_texts", return_value=2),
+        patch("app.embed_image", return_value=object()),
+        patch("app.search_similar", return_value=global_similar),
+    ):
+        _, _, warning, gallery, _, state, _ = app.on_image_upload(_sample_image())
+
+    # 무관한 전역 상품은 제외되고, 스코핑된 b만 남는다 (a는 전역 검색에 없어 탈락)
+    assert warning == ""
+    assert [p["purchase_url"] for p in state["candidate_products"]] == [
+        "https://example.com/item/b"
+    ]
+    assert gallery == [("https://example.com/b.jpg", "B 셔츠 - 150,000원")]
+
+
+def test_on_image_upload_falls_back_to_scoped_when_visual_intersection_empty():
+    products = _sample_products()  # a, b
+    unrelated_global_hits = [
+        {
+            "name": "무관한 전역 상품",
+            "price": 5000,
+            "image_url": "https://example.com/irrelevant.jpg",
+            "purchase_url": "https://example.com/item/irrelevant",
+            "source": "naver",
+        }
+    ]
+    with (
+        patch("app.detect_products", return_value=[_sample_detection()]),
+        patch("app.detect_color", return_value="빨간"),
+        patch("app.classify_subtype", return_value=None),
+        patch("app.search_similar_text", return_value=[]),
+        patch("app.search_naver_variants", return_value=products),
+        patch("app.index_products", return_value=2),
+        patch("app.index_product_texts", return_value=2),
+        patch("app.embed_image", return_value=object()),
+        patch("app.search_similar", return_value=unrelated_global_hits),
+    ):
+        _, _, warning, gallery, _, state, _ = app.on_image_upload(_sample_image())
+
+    # 교집합이 비므로 스코핑된 naver 결과(products) 그대로 사용
+    assert warning == ""
+    assert [p["purchase_url"] for p in state["candidate_products"]] == [
+        "https://example.com/item/a",
+        "https://example.com/item/b",
+    ]
+    assert gallery == [
+        ("https://example.com/a.jpg", "A 셔츠 - 50,000원"),
+        ("https://example.com/b.jpg", "B 셔츠 - 150,000원"),
+    ]
 
 
 def test_on_chat_submit_applies_budget_filter():
@@ -318,7 +383,7 @@ def test_on_chat_submit_freshness_keyword_triggers_live_refresh():
     ]
 
     with (
-        patch("app.search_naver", return_value=fresh_products) as mock_search_naver,
+        patch("app.search_naver_variants", return_value=fresh_products) as mock_search_naver_variants,
         patch("app.index_products", return_value=1) as mock_index,
         patch("app.index_product_texts", return_value=1) as mock_index_text,
         patch("app.generate_response", return_value="최신 상품으로 갱신했어요."),
@@ -327,11 +392,30 @@ def test_on_chat_submit_freshness_keyword_triggers_live_refresh():
             "최신 상품 있어?", [], state
         )
 
-    assert mock_search_naver.called
+    assert mock_search_naver_variants.called
     assert mock_index.called
     assert mock_index_text.called
     assert new_state["candidate_products"] == fresh_products
     assert gallery == [("https://example.com/new.jpg", "신상 셔츠 - 99,000원")]
+
+
+def test_on_chat_submit_freshness_refresh_failure_logs_exception():
+    state = {
+        "detected_item": _sample_detection(),
+        "color": "빨간",
+        "subtype": None,
+        "candidate_products": _sample_products(),
+        "history": [],
+    }
+
+    with (
+        patch("app.search_naver_variants", side_effect=NaverAPIError("boom")),
+        patch("app.generate_response", return_value="응답"),
+        patch("app.logger") as mock_logger,
+    ):
+        app.on_chat_submit("최신 상품 있어?", [], state)
+
+    assert mock_logger.exception.called
 
 
 def test_on_chat_submit_without_freshness_keyword_does_not_call_naver():
@@ -344,9 +428,9 @@ def test_on_chat_submit_without_freshness_keyword_does_not_call_naver():
     }
 
     with (
-        patch("app.search_naver") as mock_search_naver,
+        patch("app.search_naver_variants") as mock_search_naver_variants,
         patch("app.generate_response", return_value="42,800원입니다."),
     ):
         app.on_chat_submit("얼마야?", [], state)
 
-    assert not mock_search_naver.called
+    assert not mock_search_naver_variants.called

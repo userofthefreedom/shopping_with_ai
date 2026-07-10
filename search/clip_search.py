@@ -171,8 +171,15 @@ def index_products(products: list[dict], category: str, color: str) -> int:
         색인된(이미 있었던 것 포함) 상품 수. 이미지 다운로드/임베딩 실패한
         상품은 제외.
     """
+    valid_products = [p for p in products if p.get("purchase_url")]
+    skipped = len(products) - len(valid_products)
+    if skipped:
+        # purchase_url이 빈 상품은 전부 같은 해시로 id가 겹쳐 서로 덮어쓴다
+        # (다른 상품인데 하나만 색인되는 결과) — 색인 전에 걸러낸다.
+        logger.warning("purchase_url이 없는 상품 %d건을 색인에서 제외함", skipped)
+
     collection = _get_collection()
-    id_to_product = {_make_id(product): product for product in products}
+    id_to_product = {_make_id(product): product for product in valid_products}
 
     existing_ids = set()
     if id_to_product:

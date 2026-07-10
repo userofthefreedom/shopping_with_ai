@@ -8,7 +8,7 @@ from PIL import Image
 
 from search import clip_search
 from search.clip_search import classify_subtype, embed_image, index_products, search_similar
-from search.naver_api import NaverAPIError, search_naver
+from search.naver_api import NaverAPIError, search_naver, search_naver_variants
 
 _FAKE_RESPONSE_JSON = {
     "items": [
@@ -87,6 +87,81 @@ def test_search_naver_raises_on_timeout(monkeypatch):
     with patch("search.naver_api.requests.get", side_effect=requests.Timeout("timed out")):
         with pytest.raises(NaverAPIError):
             search_naver("빨간색 반팔 셔츠")
+
+
+def test_search_naver_raises_on_malformed_json(monkeypatch):
+    _fake_env(monkeypatch)
+    mock_response = Mock()
+    mock_response.raise_for_status = Mock()
+    mock_response.json.side_effect = ValueError("Expecting value: line 1 column 1")
+
+    with patch("search.naver_api.requests.get", return_value=mock_response):
+        with pytest.raises(NaverAPIError):
+            search_naver("빨간색 반팔 셔츠")
+
+
+def test_search_naver_treats_blank_lprice_as_zero(monkeypatch):
+    _fake_env(monkeypatch)
+    mock_response = Mock()
+    mock_response.raise_for_status = Mock()
+    mock_response.json.return_value = {
+        "items": [
+            {
+                "title": "가격 미정 상품",
+                "link": "https://example.com/item/1",
+                "image": "https://example.com/1.jpg",
+                "lprice": "",
+                "mallName": "네이버",
+            }
+        ]
+    }
+
+    with patch("search.naver_api.requests.get", return_value=mock_response):
+        products = search_naver("빨간색 반팔 셔츠")
+
+    assert products[0]["price"] == 0
+
+
+def test_search_naver_variants_merges_synonym_queries_deduped():
+    calls = []
+
+    def fake_search_naver(query):
+        calls.append(query)
+        if "티셔츠" in query:
+            return [
+                {
+                    "name": "티셔츠 상품",
+                    "price": 10000,
+                    "image_url": "https://example.com/tee.jpg",
+                    "purchase_url": "https://example.com/item/tee",
+                    "source": "네이버",
+                }
+            ]
+        return [
+            {
+                "name": "셔츠 상품",
+                "price": 20000,
+                "image_url": "https://example.com/shirt.jpg",
+                "purchase_url": "https://example.com/item/shirt",
+                "source": "네이버",
+            },
+            {
+                "name": "중복 상품(티셔츠 검색에서도 잡힘)",
+                "price": 10000,
+                "image_url": "https://example.com/tee.jpg",
+                "purchase_url": "https://example.com/item/tee",
+                "source": "네이버",
+            },
+        ]
+
+    with patch("search.naver_api.search_naver", side_effect=fake_search_naver):
+        merged = search_naver_variants("short_sleeved_shirt", "파란")
+
+    assert sorted(calls) == sorted(["파란색 반팔 셔츠", "파란색 반팔 티셔츠"])
+    assert [p["purchase_url"] for p in merged] == [
+        "https://example.com/item/shirt",
+        "https://example.com/item/tee",
+    ]
 
 
 def _png_bytes(color):
@@ -173,6 +248,40 @@ def test_classify_subtype_returns_one_of_candidate_labels_when_threshold_disable
 
     expected_labels = {ko for _, ko in clip_search._SUBTYPE_CANDIDATES["long_sleeved_outwear"]}
     assert result in expected_labels
+
+
+def test_index_products_skips_products_with_empty_purchase_url(isolated_chroma):
+    products = [
+        {
+            "name": "정상 상품",
+            "price": 10000,
+            "image_url": "https://example.com/red.jpg",
+            "purchase_url": "https://example.com/item/red",
+        },
+        {
+            "name": "구매링크 없는 상품 1",
+            "price": 20000,
+            "image_url": "https://example.com/a.jpg",
+            "purchase_url": "",
+        },
+        {
+            "name": "구매링크 없는 상품 2",
+            "price": 30000,
+            "image_url": "https://example.com/b.jpg",
+            "purchase_url": "",
+        },
+    ]
+
+    def fake_get(url, timeout=5):
+        response = Mock()
+        response.raise_for_status = Mock()
+        response.content = _png_bytes((220, 20, 20))
+        return response
+
+    with patch("search.clip_search.requests.get", side_effect=fake_get):
+        indexed_count = index_products(products, category="short_sleeved_shirt", color="빨간")
+
+    assert indexed_count == 1  # 빈 purchase_url 상품 2건은 제외
 
 
 def test_index_products_skips_already_indexed_purchase_url(isolated_chroma):
